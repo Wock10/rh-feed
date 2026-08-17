@@ -59,6 +59,21 @@ export function extractStats(raw) {
   };
 }
 
+export function extractIntervals(raw) {
+  const out = { oneDay: null, sevenDay: null, thirtyDay: null };
+  for (const row of raw?.intervals ?? []) {
+    const key = String(row.interval ?? "").toLowerCase().replaceAll("-", "_");
+    const stat = {
+      sales: Number(row.sales ?? 0) || 0,
+      volume: Number(row.volume ?? 0) || 0,
+    };
+    if (key === "one_day" || key === "1d") out.oneDay = stat;
+    else if (key === "seven_day" || key === "7d") out.sevenDay = stat;
+    else if (key === "thirty_day" || key === "30d") out.thirtyDay = stat;
+  }
+  return out;
+}
+
 export function scoreProject(project) {
   const flags = [];
   let score = 0;
@@ -138,6 +153,68 @@ export function scoreProject(project) {
     score,
     flags: [...new Set(flags)],
     verdict,
+  };
+}
+
+export function confidenceOf(project) {
+  if (project?.llm?.confidence != null) {
+    const n = Number(project.llm.confidence);
+    if (Number.isFinite(n)) return clamp(Math.round(n));
+  }
+  if (!project || project.verdict === "queued" || project.status === "queued") return null;
+  const safelist = lc(project.safelist);
+  let c = 55;
+  if (project.verdict === "ok") {
+    c = 70;
+    if (SAFE_OK.has(safelist)) c += 16;
+    if (project.website && project.twitter) c += 6;
+    if ((project.owners ?? 0) >= 20) c += 5;
+    c -= Math.min(12, Number(project.score ?? 0));
+  } else if (project.verdict === "thin") {
+    c = 48;
+    if (project.website || project.twitter) c += 6;
+    c -= Math.min(10, Math.max(0, Number(project.score ?? 0) - 3));
+  } else if (project.verdict === "vapor") {
+    c = 74;
+    if (!project.website && !project.twitter) c += 10;
+    if (project.isDisabled) c += 8;
+    if ((project.score ?? 0) >= 10) c += 6;
+  }
+  return clamp(c);
+}
+
+export function peekFromOpenSea(raw, statsRaw) {
+  const meta = extractMeta(raw ?? {});
+  const stats = extractStats(statsRaw);
+  const intervals = extractIntervals(statsRaw);
+  const project = { ...meta, ...stats };
+  const scored = scoreProject(project);
+  const row = { ...project, ...scored };
+  return {
+    slug: meta.slug,
+    name: meta.name,
+    image: meta.image,
+    website: meta.website,
+    twitter: meta.twitter,
+    discord: meta.discord,
+    safelist: meta.safelist,
+    supply: meta.totalSupply,
+    unique: meta.uniqueItemCount,
+    createdDate: meta.createdDate,
+    floor: stats.floor,
+    floorSymbol: stats.floorSymbol || "ETH",
+    volume: stats.volume,
+    sales: stats.sales,
+    owners: stats.owners,
+    oneDay: intervals.oneDay,
+    sevenDay: intervals.sevenDay,
+    verdict: scored.verdict,
+    flags: scored.flags,
+    score: scored.score,
+    confidence: confidenceOf(row),
+    collectionUrl: meta.slug
+      ? `https://opensea.io/collection/${encodeURIComponent(meta.slug)}`
+      : null,
   };
 }
 
@@ -257,6 +334,15 @@ export class ProjectWatch {
     return row;
   }
 
+  rescore(row) {
+    const scored = scoreProject(row);
+    row.score = scored.score;
+    row.flags = scored.flags;
+    if (!row.llm) row.verdict = scored.verdict;
+    row.confidence = confidenceOf(row);
+    return row;
+  }
+
   applyStats(slug, stats) {
     const row = this.projects.get(slug);
     if (!row || !stats) return row;
@@ -269,19 +355,12 @@ export class ProjectWatch {
     return row;
   }
 
-  rescore(row) {
-    const scored = scoreProject(row);
-    row.score = scored.score;
-    row.flags = scored.flags;
-    if (!row.llm) row.verdict = scored.verdict;
-    return row;
-  }
-
   setLlm(slug, llm) {
     const row = this.projects.get(slug);
     if (!row) return null;
     row.llm = llm;
     if (llm?.verdict) row.verdict = llm.verdict;
+    row.confidence = confidenceOf(row);
     this.stats.llm += 1;
     return row;
   }
@@ -312,6 +391,7 @@ export class ProjectWatch {
         safelist: p.safelist,
         owners: p.owners,
         sales: p.sales,
+        confidence: p.confidence ?? confidenceOf(p),
         needsAgent: needsAgent(p),
         llm: p.llm,
         ageMin: Math.max(0, Math.round((now - p.firstTs) / 60000)),
@@ -354,6 +434,10 @@ export class ProjectWatch {
     }
     return watch;
   }
+}
+
+function clamp(n) {
+  return Math.max(0, Math.min(100, Math.round(n)));
 }
 
 function cleanUrl(value) {

@@ -1,6 +1,6 @@
 import { normalizeStreamEvent } from "./normalize.js";
 import { TraderTracker } from "./tracker.js";
-import { ProjectWatch, extractMeta, extractStats } from "./projects.js";
+import { ProjectWatch, extractMeta, extractStats, peekFromOpenSea } from "./projects.js";
 import { MintWatch, DROP_TYPES, normalizeDrop } from "./mints.js";
 import { UserBook, summarizeOpenSea } from "./users.js";
 
@@ -621,6 +621,21 @@ export class RhFeedEngine {
     });
     this.users.put(card);
     return card;
+  }
+
+  async loadCollection(slug) {
+    const key = String(slug || "").trim();
+    if (!key) return null;
+    if (!this.apiKey) return null;
+    const headers = { accept: "application/json", "x-api-key": this.apiKey };
+    const [rawRes, statsRes] = await Promise.all([
+      fetch(`https://api.opensea.io/api/v2/collections/${encodeURIComponent(key)}`, { headers }),
+      fetch(`https://api.opensea.io/api/v2/collections/${encodeURIComponent(key)}/stats`, { headers }),
+    ]);
+    if (!rawRes.ok) throw new Error(`OpenSea ${rawRes.status}`);
+    const raw = await rawRes.json();
+    const statsRaw = statsRes.ok ? await statsRes.json() : null;
+    return peekFromOpenSea(raw, statsRaw);
   }
 
   async pumpProjects() {

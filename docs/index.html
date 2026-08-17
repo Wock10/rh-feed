@@ -45,7 +45,7 @@
         </section>
         <section>
           <h2>New projects <span id="project-count">0</span></h2>
-          <p class="hint">New collections only. Heuristics first. Copy pack uses the prompt. Ask is manual, cheap model, 4/hour cap.</p>
+          <p class="hint">New collections only. Hover for OpenSea stats and confidence. Ask only if still ambiguous.</p>
           <div id="projects" class="heat-list"></div>
         </section>
         <section>
@@ -104,6 +104,7 @@
       </main>
     </div>
     <div id="toast" class="toast hidden"></div>
+    <div id="col-tip" class="col-tip hidden"></div>
     <div id="key-gate" class="key-gate hidden">
       <form id="key-form">
         <h2>OpenSea API key</h2>
@@ -199,7 +200,7 @@
               <dt><span class="flag gas">gas</span></dt>
               <dd>Eligible, but the wallet is short on balance.</dd>
               <dt><span class="flag thin">thin</span> <span class="flag vapor">vapor</span></dt>
-              <dd>OpenSea listing looks weak: missing socials, TBA copy, one owner, or parked.</dd>
+              <dd>OpenSea listing looks weak: missing socials, TBA copy, one owner, or parked. Hover a collection for floor / volume / owners and our confidence %.</dd>
             </dl>
           </section>
         </div>

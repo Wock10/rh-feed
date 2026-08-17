@@ -96,6 +96,9 @@ const state = {
   search: "",
   toastTimer: null,
   lastHot: new Set(),
+  colCache: new Map(),
+  colInflight: new Map(),
+  colSlug: null,
 };
 
 const els = {
@@ -137,6 +140,7 @@ const els = {
   keyForm: document.getElementById("key-form"),
   openseaKey: document.getElementById("opensea-key"),
   keyBtn: document.getElementById("key-btn"),
+  colTip: document.getElementById("col-tip"),
 };
 
 function typesParam() {
@@ -157,6 +161,7 @@ async function hasBackend() {
 async function boot() {
   renderTypes();
   renderChips();
+  bindColTip();
   if (await hasBackend()) {
     state.backend = true;
     await loadPrompt();
@@ -521,7 +526,7 @@ function renderUserCard() {
   }
   const cols = (u.collections ?? [])
     .slice(0, 4)
-    .map((c) => c.name || c.slug)
+    .map((c) => `<span class="col-link" data-col="${esc(c.slug)}">${esc(c.name || c.slug)}</span>`)
     .join(", ");
   const eth = [
     u.ethIn ? `in ${formatAmt(u.ethIn)} ETH` : "",
@@ -540,7 +545,7 @@ function renderUserCard() {
     <div class="heat-meta">
       <span class="name">${esc(name)}</span>
       <span class="sub">${esc(short(u.address))} · ${u.buys}b / ${u.sells}s / ${u.mints}m · ${u.collectionCount} cols · OpenSea${u.firstTs ? ` · seen ${relTime(u.firstTs)}` : ""}</span>
-      <span class="sub">${eth || "no ETH prints yet"}${usd ? ` · stables ${usd}` : ""}${cols ? ` · ${esc(cols)}` : ""}</span>
+      <span class="sub">${eth || "no ETH prints yet"}${usd ? ` · stables ${usd}` : ""}${cols ? ` · ${cols}` : ""}</span>
     </div>
     <a class="mute-btn" href="${esc(u.url)}" target="_blank" rel="noreferrer">OS</a>`;
 }
@@ -601,7 +606,7 @@ function rowHtml(e) {
       <div class="meta">
         <a class="item-name" href="${esc(e.permalink || e.collectionUrl || "#")}" target="_blank" rel="noreferrer">${esc(e.name)}</a>
         <div class="collection-line">
-          <a href="${esc(e.collectionUrl || "#")}" target="_blank" rel="noreferrer">${esc(colName)}</a>
+          <a class="col-link" data-col="${esc(e.slug)}" href="${esc(e.collectionUrl || "#")}" target="_blank" rel="noreferrer">${esc(colName)}</a>
           ${badges}
           <button class="mute-btn inline-mute" data-mute="${esc(e.slug)}" data-name="${esc(colName)}" type="button">Mute</button>
         </div>
@@ -678,7 +683,7 @@ function renderHeat() {
       const img = h.image
         ? `<img src="${esc(h.image)}" alt="" />`
         : `<span class="ph"></span>`;
-      return `<button type="button" class="heat-row${state.focus === h.slug ? " on" : ""}" data-focus="${esc(h.slug)}">
+      return `<button type="button" class="heat-row${state.focus === h.slug ? " on" : ""}" data-focus="${esc(h.slug)}" data-col="${esc(h.slug)}">
         ${img}
         <span class="heat-meta">
           <span class="name">${esc(h.name)}</span>
@@ -713,7 +718,7 @@ function renderSweeps() {
         partyKind(s.buyer, s.buyerName),
         s.buyerName || short(s.buyer),
       );
-      return `<button type="button" class="heat-row" data-focus="${esc(s.slug)}">
+      return `<button type="button" class="heat-row" data-focus="${esc(s.slug)}" data-col="${esc(s.slug)}">
         ${pic}
         <span class="heat-meta">
           <span class="name">${esc(s.name)}</span>
@@ -815,13 +820,14 @@ function renderProjects() {
       ]
         .filter(Boolean)
         .join(" · ");
-      return `<div class="heat-row${state.focus === p.slug ? " on" : ""}">
+      return `<div class="heat-row${state.focus === p.slug ? " on" : ""}" data-col="${esc(p.slug)}">
         <button type="button" class="heat-meta" data-focus="${esc(p.slug)}" style="background:transparent;border:0;color:inherit;text-align:left;padding:0;font:inherit;cursor:pointer">
           <span class="name">${esc(p.name)}</span>
           <span class="sub">${esc(bits)} · ${links}</span>
         </button>
         <span class="proj-actions">
           <span class="flag ${esc(p.verdict)}" title="${esc(FLAG_HELP[p.verdict] || "")}">${esc(p.verdict)}</span>
+          ${p.confidence != null ? `<span class="conf" title="How sure we are of this verdict">${p.confidence}%</span>` : ""}
           ${flags}
           <button type="button" class="mute-btn" data-pack="${esc(p.slug)}">Copy</button>
           ${ask}
@@ -882,7 +888,7 @@ function renderMints() {
       ]
         .filter(Boolean)
         .join(" · ");
-      return `<button type="button" class="heat-row${state.focus === m.slug ? " on" : ""}" data-focus="${esc(m.slug)}">
+      return `<button type="button" class="heat-row${state.focus === m.slug ? " on" : ""}" data-focus="${esc(m.slug)}" data-col="${esc(m.slug)}">
         ${img}
         <span class="heat-meta">
           <span class="name">${esc(m.name)}</span>
@@ -1074,7 +1080,7 @@ function renderResults() {
       const action = muted
         ? `<button class="un-btn" data-un="${esc(slug)}" type="button">Unmute</button>`
         : `<button class="mute-btn" data-mute="${esc(slug)}" data-name="${esc(name)}" type="button">Mute</button>`;
-      return `<div class="col-row">${img}<span class="name" title="${esc(slug)}">${esc(name)}</span><span>${count}${action}</span></div>`;
+      return `<div class="col-row" data-col="${esc(slug)}">${img}<span class="name">${esc(name)}</span><span>${count}${action}</span></div>`;
     })
     .join("");
   bindMuteButtons(els.results);
@@ -1219,6 +1225,169 @@ function esc(value) {
     .replaceAll("<", "&lt;")
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;");
+}
+
+const COL_FRESH_MS = 3 * 60 * 1000;
+let colShowTimer = null;
+let colHideTimer = null;
+
+function bindColTip() {
+  if (!els.colTip) return;
+  document.addEventListener("pointerover", (ev) => {
+    const el = ev.target.closest("[data-col]");
+    if (!el || ev.target.closest(".mute-btn, .un-btn, .inline-mute")) return;
+    showColTip(el);
+  });
+  document.addEventListener("pointerout", (ev) => {
+    const el = ev.target.closest("[data-col]");
+    if (!el) return;
+    if (el.contains(ev.relatedTarget) || els.colTip?.contains(ev.relatedTarget)) return;
+    hideColTipSoon();
+  });
+  els.colTip.addEventListener("pointerenter", () => {
+    clearTimeout(colHideTimer);
+  });
+  els.colTip.addEventListener("pointerleave", hideColTipSoon);
+}
+
+function showColTip(el) {
+  const slug = el.dataset.col;
+  if (!slug) return;
+  clearTimeout(colHideTimer);
+  clearTimeout(colShowTimer);
+  colShowTimer = setTimeout(() => openColTip(el, slug), 140);
+}
+
+function hideColTipSoon() {
+  clearTimeout(colShowTimer);
+  colHideTimer = setTimeout(hideColTip, 180);
+}
+
+function hideColTip() {
+  state.colSlug = null;
+  els.colTip?.classList.add("hidden");
+}
+
+async function openColTip(el, slug) {
+  state.colSlug = slug;
+  const cached = state.colCache.get(slug);
+  if (cached && Date.now() - cached.at < COL_FRESH_MS) {
+    renderColTip(el, cached.card);
+    return;
+  }
+  renderColTip(el, { slug, name: slug, loading: true });
+  try {
+    const card = await loadColPeek(slug);
+    if (state.colSlug !== slug) return;
+    renderColTip(el, card);
+  } catch (err) {
+    if (state.colSlug !== slug) return;
+    renderColTip(el, { slug, name: slug, error: err.message || "OpenSea stats unavailable" });
+  }
+}
+
+async function loadColPeek(slug) {
+  const cached = state.colCache.get(slug);
+  if (cached && Date.now() - cached.at < COL_FRESH_MS) return cached.card;
+  if (state.colInflight.has(slug)) return state.colInflight.get(slug);
+  const job = (async () => {
+    let card;
+    if (state.backend) {
+      const res = await fetch(`/api/collections/${encodeURIComponent(slug)}`, { cache: "no-store" });
+      if (!res.ok) throw new Error("OpenSea stats unavailable");
+      card = await res.json();
+    } else if (state.engine?.loadCollection) {
+      card = await state.engine.loadCollection(slug);
+    } else {
+      throw new Error("OpenSea stats unavailable");
+    }
+    state.colCache.set(slug, { at: Date.now(), card });
+    return card;
+  })().finally(() => state.colInflight.delete(slug));
+  state.colInflight.set(slug, job);
+  return job;
+}
+
+function formatVol(n, symbol = "") {
+  if (n == null || !Number.isFinite(Number(n))) return "—";
+  const v = Number(n);
+  let body;
+  if (v >= 1_000_000) body = `${(v / 1_000_000).toFixed(1)}m`;
+  else if (v >= 1000) body = `${(v / 1000).toFixed(1)}k`;
+  else body = formatAmt(v);
+  return symbol ? `${body} ${symbol}` : body;
+}
+
+function renderColTip(anchor, card) {
+  if (!els.colTip) return;
+  if (card.loading) {
+    els.colTip.innerHTML = `<div class="col-tip-head"><span class="name">${esc(card.name || card.slug)}</span></div><p class="hint">Loading OpenSea stats…</p>`;
+    placeColTip(anchor);
+    return;
+  }
+  if (card.error) {
+    els.colTip.innerHTML = `<div class="col-tip-head"><span class="name">${esc(card.name || card.slug)}</span></div><p class="hint">${esc(card.error)}</p>`;
+    placeColTip(anchor);
+    return;
+  }
+  const heat = state.heat.find((h) => h.slug === card.slug);
+  const img = card.image
+    ? `<img src="${esc(card.image)}" alt="" />`
+    : `<span class="ph"></span>`;
+  const sym = card.floorSymbol || "ETH";
+  const live = heat
+    ? `<div class="col-tip-live">${heat.n1}/min · ${heat.n5}/5m · ${heat.buyers} buyers</div>`
+    : "";
+  const conf = card.confidence != null
+    ? `<span class="conf" title="How sure we are of this verdict">${card.confidence}%</span>`
+    : "";
+  const bar = card.confidence != null
+    ? `<div class="col-tip-bar ${esc(card.verdict || "")}" title="${card.confidence}% confidence"><span style="width:${card.confidence}%"></span></div>`
+    : "";
+  const flags = (card.flags ?? [])
+    .slice(0, 5)
+    .map((f) => flagHtml("thin", f))
+    .join("");
+  const why = card.llm?.why ? `<p class="hint">${esc(card.llm.why)}</p>` : "";
+  els.colTip.innerHTML = `
+    <div class="col-tip-head">
+      ${img}
+      <div>
+        <a class="name" href="${esc(card.collectionUrl || `https://opensea.io/collection/${encodeURIComponent(card.slug)}`)}" target="_blank" rel="noreferrer">${esc(card.name || card.slug)}</a>
+        <div class="col-tip-verdict">
+          ${card.verdict ? `<span class="flag ${esc(card.verdict)}">${esc(card.verdict)}</span>` : ""}
+          ${conf}
+        </div>
+      </div>
+    </div>
+    ${bar}
+    <dl class="col-tip-stats">
+      <div><dt>Floor</dt><dd>${card.floor != null ? `${esc(formatAmt(card.floor))} ${esc(sym)}` : "—"}</dd></div>
+      <div><dt>1d vol</dt><dd>${formatVol(card.oneDay?.volume, sym)}</dd></div>
+      <div><dt>Volume</dt><dd>${formatVol(card.volume, sym)}</dd></div>
+      <div><dt>Sales</dt><dd>${card.sales != null ? Number(card.sales).toLocaleString("en-US") : "—"}</dd></div>
+      <div><dt>Owners</dt><dd>${card.owners != null ? Number(card.owners).toLocaleString("en-US") : "—"}</dd></div>
+      <div><dt>Items</dt><dd>${card.supply ? Number(card.supply).toLocaleString("en-US") : "—"}</dd></div>
+    </dl>
+    ${live}
+    ${flags ? `<div class="col-tip-flags">${flags}</div>` : ""}
+    ${why}`;
+  placeColTip(anchor);
+}
+
+function placeColTip(anchor) {
+  const tip = els.colTip;
+  tip.classList.remove("hidden");
+  const r = anchor.getBoundingClientRect();
+  const tw = tip.offsetWidth;
+  const th = tip.offsetHeight;
+  let left = r.right + 10;
+  let top = r.top;
+  if (left + tw > window.innerWidth - 8) left = Math.max(8, r.left - tw - 10);
+  if (top + th > window.innerHeight - 8) top = Math.max(8, window.innerHeight - th - 8);
+  if (top < 8) top = 8;
+  tip.style.left = `${left}px`;
+  tip.style.top = `${top}px`;
 }
 
 els.minUsd.value = String(state.minUsd || "");

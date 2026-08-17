@@ -12,6 +12,7 @@ import { TraderJobs } from "./jobs.js";
 import { ProjectJobs } from "./project-jobs.js";
 import { MintJobs } from "./mint-jobs.js";
 import { UserJobs } from "./user-jobs.js";
+import { CollectionJobs } from "./collection-jobs.js";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 dotenv.config({ path: path.join(ROOT, ".env") });
@@ -49,6 +50,7 @@ const users = new UserJobs({
   rest,
   env: process.env,
 });
+const collections = new CollectionJobs({ rest, projects });
 
 /** @type {Set<{ res: import('node:http').ServerResponse, types: Set<string>|null }>} */
 const clients = new Set();
@@ -305,6 +307,18 @@ async function handleApi(req, res, url) {
       );
     }
     return json(res, 200, { collections: rows.slice(0, 40) });
+  }
+
+  if (req.method === "GET" && url.pathname.startsWith("/api/collections/")) {
+    const slug = decodeURIComponent(url.pathname.slice("/api/collections/".length));
+    if (!slug) return json(res, 400, { error: "slug is required" });
+    try {
+      const card = await collections.peek(slug);
+      if (!card) return json(res, 404, { error: "unknown collection" });
+      return json(res, 200, card);
+    } catch (err) {
+      return json(res, 502, { error: err.message });
+    }
   }
 
   if (req.method === "GET" && url.pathname === "/api/noise") {
