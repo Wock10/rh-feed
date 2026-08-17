@@ -55,6 +55,9 @@ const state = {
   heat: [],
   sweeps: [],
   traders: [],
+  projects: [],
+  projectStats: {},
+  promptText: "",
   focus: null,
   wallet: null,
   minUsd: Number(localStorage.getItem(USD_KEY) ?? 0) || 0,
@@ -85,6 +88,14 @@ const els = {
   sweeps: document.getElementById("sweeps"),
   traders: document.getElementById("traders"),
   traderCount: document.getElementById("trader-count"),
+  projects: document.getElementById("projects"),
+  projectCount: document.getElementById("project-count"),
+  promptBtn: document.getElementById("prompt-btn"),
+  promptDrawer: document.getElementById("prompt-drawer"),
+  promptText: document.getElementById("prompt-text"),
+  promptSave: document.getElementById("prompt-save"),
+  promptClose: document.getElementById("prompt-close"),
+  promptStatus: document.getElementById("prompt-status"),
   minUsd: document.getElementById("min-usd"),
   alerts: document.getElementById("alerts"),
   gate: document.getElementById("key-gate"),
@@ -113,11 +124,13 @@ async function boot() {
   renderChips();
   if (await hasBackend()) {
     state.backend = true;
+    await loadPrompt();
     connect();
     return;
   }
   const key = localStorage.getItem(KEY_STORE) ?? "";
   els.keyBtn?.classList.remove("hidden");
+  await loadPrompt();
   if (!key) {
     els.gate?.classList.remove("hidden");
     return;
@@ -216,10 +229,13 @@ function onTrends(data) {
   state.heat = data.heat ?? state.heat;
   state.sweeps = data.sweeps ?? state.sweeps;
   if (data.traders) state.traders = data.traders;
+  if (data.projects) state.projects = data.projects;
+  if (data.projectStats) state.projectStats = data.projectStats;
   if (state.alerts) pingNewSignals(state.heat, state.sweeps, state.traders);
   renderHeat();
   renderSweeps();
   renderTraders();
+  renderProjects();
 }
 
 function pushEvent(event, fresh = false) {
@@ -572,6 +588,146 @@ function renderTraders() {
   });
 }
 
+function renderProjects() {
+  const rows = state.projects ?? [];
+  if (els.projectCount) els.projectCount.textContent = String(rows.length);
+  if (!els.projects) return;
+  if (!rows.length) {
+    els.projects.innerHTML = `<div class="hint">Waiting on collections that were not in the bootstrap list.</div>`;
+    return;
+  }
+  const canAsk = Boolean(state.backend && state.projectStats?.llmEnabled);
+  els.projects.innerHTML = rows
+    .map((p) => {
+      const flags = (p.flags ?? [])
+        .slice(0, 3)
+        .map((f) => `<span class="flag thin">${esc(f)}</span>`)
+        .join("");
+      const links = [
+        p.website ? `<a href="${esc(p.website)}" target="_blank" rel="noreferrer">site</a>` : "",
+        p.twitterUrl ? `<a href="${esc(p.twitterUrl)}" target="_blank" rel="noreferrer">x</a>` : "",
+        `<a href="${esc(p.collectionUrl)}" target="_blank" rel="noreferrer">os</a>`,
+      ]
+        .filter(Boolean)
+        .join(" · ");
+      return `<div class="heat-row${state.focus === p.slug ? " on" : ""}">
+        <button type="button" class="heat-meta" data-focus="${esc(p.slug)}" style="background:transparent;border:0;color:inherit;text-align:left;padding:0;font:inherit;cursor:pointer">
+          <span class="name">${esc(p.name)}</span>
+          <span class="sub">${p.ageMin}m · ${links}${p.llm?.why ? ` · ${esc(p.llm.why)}` : ""}</span>
+        </button>
+        <span class="proj-actions">
+          <span class="flag ${esc(p.verdict)}">${esc(p.verdict)}</span>
+          ${flags}
+          <button type="button" class="mute-btn" data-pack="${esc(p.slug)}">Copy</button>
+          ${canAsk ? `<button type="button" class="mute-btn" data-ask="${esc(p.slug)}">Ask</button>` : ""}
+        </span>
+      </div>`;
+    })
+    .join("");
+  els.projects.querySelectorAll("[data-focus]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      state.focus = state.focus === btn.dataset.focus ? null : btn.dataset.focus;
+      renderProjects();
+      renderHeat();
+      renderChips();
+      renderRows();
+    });
+  });
+  els.projects.querySelectorAll("[data-pack]").forEach((btn) => {
+    btn.addEventListener("click", () => copyPack(btn.dataset.pack));
+  });
+  els.projects.querySelectorAll("[data-ask]").forEach((btn) => {
+    btn.addEventListener("click", () => askProject(btn.dataset.ask));
+  });
+}
+
+async function copyPack(slug) {
+  try {
+    let pack = "";
+    if (state.backend) {
+      const res = await fetch(`/api/projects/${encodeURIComponent(slug)}/pack`);
+      const data = await res.json();
+      pack = data.pack || "";
+    } else {
+      const p = state.projects.find((row) => row.slug === slug);
+      pack = `${state.promptText.trim()}
+
+---
+name: ${p?.name || slug}
+slug: ${slug}
+website: ${p?.website || "(none)"}
+twitter: ${p?.twitter ? `@${p.twitter}` : "(none)"}
+heuristic: ${p?.verdict} (${(p?.flags ?? []).join(",") || "none"})
+`;
+    }
+    await navigator.clipboard.writeText(pack);
+    showToast("Prompt pack copied");
+  } catch (err) {
+    showToast(err.message || "copy failed");
+  }
+}
+
+async function askProject(slug) {
+  try {
+    const res = await fetch(`/api/projects/${encodeURIComponent(slug)}/review`, { method: "POST" });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || "ask failed");
+    const idx = state.projects.findIndex((p) => p.slug === slug);
+    if (idx >= 0) {
+      state.projects[idx] = {
+        ...state.projects[idx],
+        verdict: data.verdict,
+        llm: data.llm,
+        flags: data.flags ?? state.projects[idx].flags,
+      };
+    }
+    renderProjects();
+    showToast(`${data.verdict}: ${data.llm?.why || "done"}`);
+  } catch (err) {
+    showToast(err.message || "ask failed");
+  }
+}
+
+async function loadPrompt() {
+  const local = localStorage.getItem("rh-feed-vapor-prompt");
+  try {
+    if (state.backend) {
+      const res = await fetch("/api/prompt");
+      const data = await res.json();
+      state.promptText = local || data.text || "";
+    } else {
+      const res = await fetch("./prompts/vaporware.md");
+      state.promptText = local || (await res.text());
+    }
+  } catch {
+    state.promptText = local || "";
+  }
+  if (els.promptText) els.promptText.value = state.promptText;
+}
+
+async function savePrompt() {
+  const text = els.promptText.value;
+  state.promptText = text;
+  localStorage.setItem("rh-feed-vapor-prompt", text);
+  if (state.backend) {
+    const res = await fetch("/api/prompt", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ text }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      if (els.promptStatus) els.promptStatus.textContent = data.error || "save failed";
+      return;
+    }
+  }
+  if (els.promptStatus) {
+    els.promptStatus.textContent = state.backend
+      ? "Saved to docs/prompts/vaporware.md"
+      : "Saved in this browser";
+  }
+}
+
 function hydrateLocalMutes() {
   try {
     const rows = JSON.parse(localStorage.getItem(MUTE_KEY) ?? "[]");
@@ -728,8 +884,10 @@ async function unmute(slug) {
 
 function showToast(message, onUndo) {
   els.toast.classList.remove("hidden");
-  els.toast.innerHTML = `<span>${esc(message)}</span><button class="linkish" type="button">Undo</button>`;
-  els.toast.querySelector("button").addEventListener("click", () => {
+  els.toast.innerHTML = onUndo
+    ? `<span>${esc(message)}</span><button class="linkish" type="button">Undo</button>`
+    : `<span>${esc(message)}</span>`;
+  els.toast.querySelector("button")?.addEventListener("click", () => {
     els.toast.classList.add("hidden");
     onUndo();
   });
@@ -833,6 +991,12 @@ els.keyBtn?.addEventListener("click", () => {
   els.gate?.classList.remove("hidden");
   els.openseaKey.value = localStorage.getItem(KEY_STORE) ?? "";
 });
+els.promptBtn?.addEventListener("click", () => {
+  els.promptDrawer?.classList.remove("hidden");
+  if (els.promptText) els.promptText.value = state.promptText;
+});
+els.promptClose?.addEventListener("click", () => els.promptDrawer?.classList.add("hidden"));
+els.promptSave?.addEventListener("click", () => savePrompt());
 
 renderTypes();
 renderChips();

@@ -23,6 +23,7 @@
           <span id="stream-pill" class="pill wait">connecting</span>
           <span class="stat"><b id="rate">0</b>/min</span>
           <button id="pause-btn" type="button" class="ghost">Pause</button>
+          <button id="prompt-btn" type="button" class="ghost">Prompt</button>
           <button id="key-btn" type="button" class="ghost hidden">Key</button>
         </div>
       </header>
@@ -32,6 +33,11 @@
           <h2>Hot wallets <span id="trader-count">0</span></h2>
           <p class="hint">Early on collections that later ran. PnL is realized, uPnL is leftover bags marked at last sales. Click to isolate.</p>
           <div id="traders" class="heat-list"></div>
+        </section>
+        <section>
+          <h2>New projects <span id="project-count">0</span></h2>
+          <p class="hint">New collections only. Heuristics first. Copy pack uses the prompt. Ask is manual, cheap model, 4/hour cap.</p>
+          <div id="projects" class="heat-list"></div>
         </section>
         <section>
           <h2>Heat</h2>
@@ -95,6 +101,22 @@
         <input id="opensea-key" type="password" autocomplete="off" placeholder="opensea api key" />
         <button type="submit">Start feed</button>
       </form>
+    </div>
+    <div id="prompt-drawer" class="prompt-drawer hidden">
+      <div class="prompt-card">
+        <div class="prompt-top">
+          <div>
+            <h2>Vaporware prompt</h2>
+            <p class="hint">docs/prompts/vaporware.md. This is the spec. Save writes the file on localhost, or this browser on Pages.</p>
+          </div>
+          <button id="prompt-close" type="button" class="ghost">Close</button>
+        </div>
+        <textarea id="prompt-text" spellcheck="false"></textarea>
+        <div class="prompt-actions">
+          <button id="prompt-save" type="button" class="ghost">Save</button>
+          <span id="prompt-status" class="hint"></span>
+        </div>
+      </div>
     </div>
     <script type="module" src="./app.js"></script>
   </body>

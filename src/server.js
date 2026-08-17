@@ -8,6 +8,7 @@ import { OpenSeaRest } from "./rest.js";
 import { FeedStore } from "./store.js";
 import { normalizeStreamEvent } from "./normalize.js";
 import { TraderJobs } from "./jobs.js";
+import { ProjectJobs } from "./project-jobs.js";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 dotenv.config({ path: path.join(ROOT, ".env") });
@@ -22,6 +23,7 @@ const MIME = {
   ".css": "text/css; charset=utf-8",
   ".svg": "image/svg+xml",
   ".json": "application/json; charset=utf-8",
+  ".md": "text/markdown; charset=utf-8",
   ".ico": "image/x-icon",
 };
 
@@ -29,6 +31,11 @@ const store = new FeedStore({ dataDir: path.join(ROOT, "data") });
 const rest = new OpenSeaRest(process.env);
 const stream = new OpenSeaStream({ apiKey: rest.keys[0], chain: CHAIN });
 const jobs = new TraderJobs({ dataDir: path.join(ROOT, "data"), rest });
+const projects = new ProjectJobs({
+  dataDir: path.join(ROOT, "data"),
+  docsDir: PUBLIC,
+  rest,
+});
 
 /** @type {Set<{ res: import('node:http').ServerResponse, types: Set<string>|null }>} */
 const clients = new Set();
@@ -148,6 +155,7 @@ stream.on("event", (eventName, payload) => {
   const kept = store.ingest(event);
   if (!kept) return;
   if (kept.type === "sale" || kept.type === "mint") jobs.ingest(kept);
+  projects.notice(kept);
   broadcast(kept);
   if (kept.type === "sale" || kept.type === "mint") {
     enqueueResolve(store.unknownAddresses([kept], 8));
@@ -170,7 +178,40 @@ async function handleApi(req, res, url) {
       stream: streamState,
       ...store.status(),
       traders: jobs.tracker.stats,
+      projects: projects.watch.stats,
     });
+  }
+
+  if (req.method === "GET" && url.pathname === "/api/projects") {
+    return json(res, 200, projects.payload());
+  }
+
+  if (req.method === "GET" && url.pathname === "/api/prompt") {
+    const text = await projects.readPrompt();
+    return json(res, 200, { text, path: "docs/prompts/vaporware.md" });
+  }
+
+  if (req.method === "PUT" && url.pathname === "/api/prompt") {
+    const body = await readBody(req);
+    const text = await projects.writePrompt(body.text ?? "");
+    return json(res, 200, { text, path: "docs/prompts/vaporware.md" });
+  }
+
+  if (req.method === "GET" && url.pathname.startsWith("/api/projects/") && url.pathname.endsWith("/pack")) {
+    const slug = decodeURIComponent(url.pathname.slice("/api/projects/".length, -"/pack".length));
+    const ev = await projects.evidence(slug);
+    if (!ev) return json(res, 404, { error: "unknown project" });
+    return json(res, 200, ev);
+  }
+
+  if (req.method === "POST" && url.pathname.startsWith("/api/projects/") && url.pathname.endsWith("/review")) {
+    const slug = decodeURIComponent(url.pathname.slice("/api/projects/".length, -"/review".length));
+    try {
+      const row = await projects.review(slug);
+      return json(res, 200, row);
+    } catch (err) {
+      return json(res, 400, { error: err.message });
+    }
   }
 
   if (req.method === "GET" && url.pathname === "/api/traders") {
@@ -188,6 +229,7 @@ async function handleApi(req, res, url) {
       heat: store.heat({ types }),
       sweeps: store.sweeps(),
       traders: jobs.payload(new Set(store.mutes.keys())).traders,
+      projects: projects.payload().projects,
       collections: store.listCollections(),
       status: { stream: streamState, ...store.status() },
     });
@@ -196,11 +238,14 @@ async function handleApi(req, res, url) {
   if (req.method === "GET" && url.pathname === "/api/trends") {
     const types = parseTypes(url);
     const traders = jobs.payload(new Set(store.mutes.keys()));
+    const proj = projects.payload();
     return json(res, 200, {
       heat: store.heat({ types }),
       sweeps: store.sweeps(),
       traders: traders.traders,
       traderStats: traders.stats,
+      projects: proj.projects,
+      projectStats: proj.stats,
     });
   }
 
@@ -274,6 +319,7 @@ async function handleApi(req, res, url) {
       heat: store.heat({ types: types ?? ["sale"] }),
       sweeps: store.sweeps(),
       traders: jobs.payload(new Set(store.mutes.keys())).traders,
+      projects: projects.payload().projects,
       collections: store.listCollections(),
       status: { stream: streamState, ...store.status() },
     };
@@ -338,7 +384,9 @@ const server = createServer(async (req, res) => {
 
 await store.load();
 await jobs.load();
+await projects.load();
 jobs.start();
+projects.start();
 if (!rest.hasKeys) {
   console.error("Set OPENSEA_API_KEY in .env");
   process.exit(1);
@@ -348,6 +396,7 @@ stream.start();
 broadcastStatus();
 function broadcastTrends() {
   const traders = jobs.payload(new Set(store.mutes.keys()));
+  const proj = projects.payload();
   for (const client of clients) {
     const types = client.types ? [...client.types] : ["sale"];
     const data = JSON.stringify({
@@ -355,6 +404,8 @@ function broadcastTrends() {
       sweeps: store.sweeps(),
       traders: traders.traders,
       traderStats: traders.stats,
+      projects: proj.projects,
+      projectStats: proj.stats,
     });
     client.res.write(`event: trends\ndata: ${data}\n\n`);
   }
@@ -366,6 +417,7 @@ rest
   .listChainCollections(CHAIN)
   .then((rows) => {
     store.addCollections(rows);
+    projects.markKnown(rows.map((r) => r.collection || r.slug));
     console.log(`Loaded ${rows.length} ${CHAIN} collections`);
   })
   .catch((err) => console.warn("collection bootstrap failed:", err.message));

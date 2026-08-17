@@ -1,5 +1,6 @@
 import { normalizeStreamEvent } from "./normalize.js";
 import { TraderTracker } from "./tracker.js";
+import { ProjectWatch, extractMeta } from "./projects.js";
 
 const WS_URL = "wss://stream-api.opensea.io/socket/websocket";
 const EVENT_TYPES = [
@@ -302,7 +303,11 @@ export class RhFeedEngine {
     this.pending = [];
     this.streamState = "connecting";
     this.tracker = loadTracker();
+    this.projects = new ProjectWatch();
+    this.projectQueue = [];
+    this.projectBusy = false;
     this.persistTimer = null;
+    this.projectTimer = null;
   }
 
   on(name, fn) {
@@ -319,6 +324,7 @@ export class RhFeedEngine {
     this.flushTimer = setInterval(() => this.flush(), 80);
     this.trendTimer = setInterval(() => this.emitTrends(), 2000);
     this.persistTimer = setInterval(() => persistTracker(this.tracker), 30_000);
+    this.projectTimer = setInterval(() => this.pumpProjects(), 6000);
     this.emitHello();
   }
 
@@ -327,6 +333,7 @@ export class RhFeedEngine {
     clearInterval(this.flushTimer);
     clearInterval(this.trendTimer);
     clearInterval(this.persistTimer);
+    clearInterval(this.projectTimer);
     persistTracker(this.tracker);
     this.teardown();
   }
@@ -352,6 +359,8 @@ export class RhFeedEngine {
         limit: 16,
       }),
       traderStats: this.tracker.stats,
+      projects: this.projects.board({ limit: 12 }),
+      projectStats: this.projects.stats,
       collections: this.store.listCollections(),
       status: { stream: this.streamState, ...this.store.status() },
     };
@@ -370,6 +379,8 @@ export class RhFeedEngine {
         limit: 16,
       }),
       traderStats: this.tracker.stats,
+      projects: this.projects.board({ limit: 12 }),
+      projectStats: this.projects.stats,
     });
   }
 
@@ -442,6 +453,11 @@ export class RhFeedEngine {
     const kept = this.store.ingest(event);
     if (!kept) return;
     if (kept.type === "sale" || kept.type === "mint") this.tracker.ingest(kept);
+    const proj = this.projects.notice(kept);
+    if (proj?.status === "queued" && !this.projectQueue.includes(kept.slug)) {
+      this.projectQueue.push(kept.slug);
+      if (this.projectQueue.length > 16) this.projectQueue.shift();
+    }
     if (this.store.isMuted(kept.slug)) return;
     this.pending.push(kept);
   }
@@ -470,6 +486,29 @@ export class RhFeedEngine {
         // ignore
       }
       this.ws = null;
+    }
+  }
+
+  async pumpProjects() {
+    if (this.projectBusy || !this.projectQueue.length || !this.apiKey) return;
+    const slug = this.projectQueue.shift();
+    const row = this.projects.projects.get(slug);
+    if (!row || row.status === "scored") return;
+    this.projectBusy = true;
+    try {
+      const res = await fetch(`https://api.opensea.io/api/v2/collections/${encodeURIComponent(slug)}`, {
+        headers: { accept: "application/json", "x-api-key": this.apiKey },
+      });
+      if (res.ok) {
+        const meta = extractMeta(await res.json());
+        this.projects.applyMeta(slug, meta);
+      }
+      row.status = "scored";
+      this.projects.rescore(row);
+    } catch {
+      row.status = "error";
+    } finally {
+      this.projectBusy = false;
     }
   }
 }

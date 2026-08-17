@@ -99,6 +99,10 @@ export class OpenSeaRest {
     return out;
   }
 
+  async getCollection(slug) {
+    return this.get(`/collections/${encodeURIComponent(slug)}`);
+  }
+
   async getAccount(address) {
     try {
       return await this.get(`/accounts/${encodeURIComponent(address)}`);

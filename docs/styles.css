@@ -228,6 +228,46 @@ body {
 .flag.organic { background: rgba(43, 196, 138, 0.1); color: #8ee7c0; }
 .flag.dump { background: rgba(255, 106, 122, 0.14); color: var(--danger); }
 .flag.hit { background: rgba(43, 196, 138, 0.16); color: var(--sale); }
+.flag.vapor { background: rgba(255, 106, 122, 0.16); color: var(--danger); }
+.flag.thin { background: rgba(245, 197, 66, 0.16); color: var(--offer); }
+.flag.ok { background: rgba(43, 196, 138, 0.12); color: var(--sale); }
+.flag.queued { background: var(--hover); color: var(--dim); }
+.proj-actions { display: flex; gap: 4px; flex-shrink: 0; }
+.proj-actions button { font-size: 11px; padding: 2px 6px; }
+.prompt-drawer {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.72);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 40;
+}
+.prompt-card {
+  width: min(720px, calc(100% - 32px));
+  max-height: calc(100% - 48px);
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  padding: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.prompt-top { display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; }
+.prompt-card h2 { margin: 0 0 4px; font-size: 18px; }
+.prompt-card textarea {
+  width: 100%;
+  min-height: 360px;
+  border: 1px solid var(--line);
+  background: var(--bg);
+  color: var(--text);
+  border-radius: 10px;
+  padding: 12px;
+  font: 13px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  resize: vertical;
+}
+.prompt-actions { display: flex; gap: 10px; align-items: center; }
 .pnl { font-variant-numeric: tabular-nums; font-weight: 600; font-size: 12px; }
 .pnl.up { color: var(--sale); }
 .pnl.down { color: var(--danger); }
