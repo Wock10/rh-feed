@@ -131,6 +131,14 @@ function enqueueResolve(addresses) {
 
 function pumpResolve() {
   if (resolveTimer || !resolveQueue.length || !rest.hasKeys) return;
+  if (rest.cooling) {
+    resolveTimer = setTimeout(() => {
+      resolveTimer = null;
+      pumpResolve();
+    }, 8000);
+    return;
+  }
+  if (resolveQueue.length > 40) resolveQueue.splice(0, resolveQueue.length - 40);
   resolveTimer = setTimeout(async () => {
     resolveTimer = null;
     const addr = resolveQueue.shift();
@@ -180,10 +188,10 @@ stream.on("event", (eventName, payload) => {
   if (!event) return;
   const kept = store.ingest(event);
   if (!kept) return;
-  if (kept.type === "sale" || kept.type === "mint") jobs.ingest(kept);
+  if (kept.type === "sale") jobs.ingest(kept);
   projects.notice(kept);
   broadcast(kept);
-  if (kept.type === "sale" || kept.type === "mint") {
+  if (kept.type === "sale") {
     enqueueResolve(store.unknownAddresses([kept], 8));
   }
 });

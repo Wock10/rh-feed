@@ -17,10 +17,19 @@ export class OpenSeaRest {
     this.keys = splitKeys(env);
     this.i = 0;
     this.remaining = new Map(this.keys.map((k) => [k, 120]));
+    this.cooldownUntil = 0;
   }
 
   get hasKeys() {
     return this.keys.length > 0;
+  }
+
+  get cooling() {
+    return Date.now() < this.cooldownUntil;
+  }
+
+  chill(ms) {
+    this.cooldownUntil = Math.max(this.cooldownUntil, Date.now() + ms);
   }
 
   nextKey() {
@@ -35,6 +44,7 @@ export class OpenSeaRest {
   }
 
   async request(pathname, { params = {}, method = "GET", body } = {}) {
+    if (this.cooling) throw new Error("OpenSea 429");
     const url = new URL(`${API}${pathname}`);
     for (const [k, v] of Object.entries(params)) {
       if (v == null || v === "") continue;
@@ -42,6 +52,7 @@ export class OpenSeaRest {
     }
     let lastErr = null;
     for (let attempt = 0; attempt < Math.max(3, this.keys.length); attempt++) {
+      if (this.cooling) throw lastErr ?? new Error("OpenSea 429");
       const key = this.nextKey();
       const res = await fetch(url, {
         method,
@@ -56,9 +67,9 @@ export class OpenSeaRest {
       const limit = Number(res.headers.get("x-ratelimit-remaining"));
       if (Number.isFinite(limit)) this.remaining.set(key, limit);
       if (res.status === 429) {
-        const retry = Number(res.headers.get("retry-after") ?? 1);
-        lastErr = new Error(`OpenSea 429`);
-        await sleep(Math.max(400, retry * 1000));
+        const retry = Number(res.headers.get("retry-after") ?? 5);
+        this.chill(Math.max(8000, retry * 1000));
+        lastErr = new Error("OpenSea 429");
         continue;
       }
       const text = await res.text();

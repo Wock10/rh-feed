@@ -209,11 +209,20 @@ function reconnectFeed() {
   else if (state.engine) applyHello(state.engine.snapshot(typesParam()));
 }
 
+let esBackoff = 1000;
+
 function connect() {
-  if (state.es) state.es.close();
+  if (state.es) {
+    state.es.onerror = null;
+    state.es.close();
+    state.es = null;
+  }
   const es = new EventSource(`/api/stream?types=${encodeURIComponent(typesParam())}`);
   state.es = es;
-  es.addEventListener("hello", (ev) => applyHello(JSON.parse(ev.data)));
+  es.addEventListener("hello", (ev) => {
+    esBackoff = 1000;
+    applyHello(JSON.parse(ev.data));
+  });
   es.addEventListener("events", (ev) => {
     if (state.paused) return;
     const { events } = JSON.parse(ev.data);
@@ -256,6 +265,15 @@ function connect() {
     }
     renderRows();
   });
+  es.onerror = () => {
+    if (state.es !== es) return;
+    renderStatus({ stream: "reconnecting" });
+    es.close();
+    state.es = null;
+    const wait = esBackoff;
+    esBackoff = Math.min(esBackoff * 1.6, 8000);
+    setTimeout(connect, wait);
+  };
 }
 
 function applyHello(data) {
@@ -1254,6 +1272,10 @@ function showColTip(el) {
   const slug = el.dataset.col;
   if (!slug) return;
   clearTimeout(colHideTimer);
+  if (state.colSlug === slug && els.colTip && !els.colTip.classList.contains("hidden")) {
+    placeColTip(el);
+    return;
+  }
   clearTimeout(colShowTimer);
   colShowTimer = setTimeout(() => openColTip(el, slug), 140);
 }
@@ -1288,7 +1310,7 @@ async function openColTip(el, slug) {
 
 async function loadColPeek(slug) {
   const cached = state.colCache.get(slug);
-  if (cached && Date.now() - cached.at < COL_FRESH_MS) return cached.card;
+  if (cached && Date.now() - cached.at < (cached.fail ? 20_000 : COL_FRESH_MS)) return cached.card;
   if (state.colInflight.has(slug)) return state.colInflight.get(slug);
   const job = (async () => {
     let card;
@@ -1303,7 +1325,13 @@ async function loadColPeek(slug) {
     }
     state.colCache.set(slug, { at: Date.now(), card });
     return card;
-  })().finally(() => state.colInflight.delete(slug));
+  })()
+    .catch((err) => {
+      const card = { slug, name: slug, error: err.message || "OpenSea stats unavailable" };
+      state.colCache.set(slug, { at: Date.now(), card, fail: true });
+      throw err;
+    })
+    .finally(() => state.colInflight.delete(slug));
   state.colInflight.set(slug, job);
   return job;
 }

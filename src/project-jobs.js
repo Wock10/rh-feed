@@ -100,7 +100,7 @@ export class ProjectJobs {
   }
 
   async pump() {
-    if (this.busy || !this.queue.length || !this.rest?.hasKeys) return;
+    if (this.busy || !this.queue.length || !this.rest?.hasKeys || this.rest.cooling) return;
     const slug = this.queue.shift();
     this.queued.delete(slug);
     const row = this.watch.projects.get(slug);

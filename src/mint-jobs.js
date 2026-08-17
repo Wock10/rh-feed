@@ -106,7 +106,7 @@ export class MintJobs {
   }
 
   async pollCalendar() {
-    if (!this.rest?.hasKeys) return;
+    if (!this.rest?.hasKeys || this.rest.cooling) return;
     this.lastCalendarAt = Date.now();
     this.stats.polls += 1;
     for (const type of DROP_TYPES) {
@@ -120,7 +120,7 @@ export class MintJobs {
   }
 
   async scanNewest() {
-    if (!this.rest?.hasKeys) return;
+    if (!this.rest?.hasKeys || this.rest.cooling) return;
     this.lastScanAt = Date.now();
     const rows = await this.rest.listNewestCollections(this.chain, { limit: 40 });
     for (const col of rows) {
@@ -132,7 +132,7 @@ export class MintJobs {
   }
 
   async pumpDetail() {
-    if (this.busy || !this.detailQueue.length || !this.rest?.hasKeys) return;
+    if (this.busy || !this.detailQueue.length || !this.rest?.hasKeys || this.rest.cooling) return;
     const item = this.detailQueue.shift();
     this.detailQueued.delete(item.slug);
     this.busy = true;
@@ -167,7 +167,7 @@ export class MintJobs {
   }
 
   async pumpEligibility() {
-    if (this.eligBusy || !this.eligQueue.length || !this.wallet || !this.rest?.hasKeys) return;
+    if (this.eligBusy || !this.eligQueue.length || !this.wallet || !this.rest?.hasKeys || this.rest.cooling) return;
     const slug = this.eligQueue.shift();
     this.eligQueued.delete(slug);
     const row = this.watch.drops.get(slug);
