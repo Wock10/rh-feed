@@ -10,6 +10,7 @@ const EVENT_TYPES = [
   "collection_offer",
   "trait_offer",
 ];
+const WATCHDOG_MS = 15_000;
 
 export class OpenSeaStream extends EventEmitter {
   constructor({ apiKey, chain = "robinhood" }) {
@@ -18,11 +19,14 @@ export class OpenSeaStream extends EventEmitter {
     this.chain = chain;
     this.ws = null;
     this.heartbeat = null;
+    this.watchdog = null;
     this.reconnectTimer = null;
     this.ref = 1;
     this.closed = false;
     this.connected = false;
     this.backoffMs = 1000;
+    this.frames = 0;
+    this.frameAt = 0;
   }
 
   start() {
@@ -32,35 +36,38 @@ export class OpenSeaStream extends EventEmitter {
 
   stop() {
     this.closed = true;
-    this.teardown();
+    this.teardown(true);
   }
 
   connect() {
     if (this.closed) return;
-    this.teardown(false);
+    this.teardown(true);
     const url = `${WS_URL}?token=${encodeURIComponent(this.apiKey)}&vsn=2.0.0`;
     const ws = new WebSocket(url);
     this.ws = ws;
 
     ws.addEventListener("open", () => {
-      this.connected = true;
-      this.backoffMs = 1000;
+      if (this.ws !== ws) return;
+      this.frameAt = Date.now();
       this.join();
       this.startHeartbeat();
-      this.emit("status", { state: "live" });
+      this.startWatchdog();
     });
 
     ws.addEventListener("message", (ev) => {
+      if (this.ws !== ws) return;
       this.onMessage(ev.data);
     });
 
     ws.addEventListener("close", () => {
+      if (this.ws !== ws) return;
       this.connected = false;
       this.emit("status", { state: "reconnecting" });
       this.scheduleReconnect();
     });
 
     ws.addEventListener("error", () => {
+      if (this.ws !== ws) return;
       try {
         ws.close();
       } catch {
@@ -81,12 +88,25 @@ export class OpenSeaStream extends EventEmitter {
     }, 25_000);
   }
 
+  startWatchdog() {
+    clearInterval(this.watchdog);
+    this.watchdog = setInterval(() => {
+      if (this.closed || !this.ws) return;
+      if (Date.now() - this.frameAt < WATCHDOG_MS) return;
+      console.warn("stream watchdog: no frames, reconnecting");
+      this.emit("status", { state: "reconnecting" });
+      this.connect();
+    }, 5_000);
+  }
+
   send(frame) {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
     this.ws.send(JSON.stringify(frame));
   }
 
   onMessage(raw) {
+    this.frames += 1;
+    this.frameAt = Date.now();
     let frame;
     try {
       frame = JSON.parse(raw);
@@ -97,7 +117,14 @@ export class OpenSeaStream extends EventEmitter {
     const eventName = frame[3];
     const payload = frame[4];
     if (eventName === "phx_reply") {
-      if (payload?.status && payload.status !== "ok") {
+      if (payload?.status === "ok") {
+        if (!this.connected) {
+          this.connected = true;
+          this.backoffMs = 1000;
+          this.emit("status", { state: "live" });
+          console.log("OpenSea stream joined");
+        }
+      } else if (payload?.status && payload.status !== "ok") {
         this.emit("error", new Error(`OpenSea stream join ${payload.status}`));
       }
       return;
@@ -122,18 +149,21 @@ export class OpenSeaStream extends EventEmitter {
   teardown(clearReconnect = true) {
     clearInterval(this.heartbeat);
     this.heartbeat = null;
+    clearInterval(this.watchdog);
+    this.watchdog = null;
     if (clearReconnect) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
     }
-    if (this.ws) {
+    const old = this.ws;
+    this.ws = null;
+    this.connected = false;
+    if (old) {
       try {
-        this.ws.close();
+        old.close();
       } catch {
         // ignore
       }
-      this.ws = null;
     }
-    this.connected = false;
   }
 }

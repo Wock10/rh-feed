@@ -210,6 +210,7 @@ async function handleApi(req, res, url) {
     return json(res, 200, {
       ok: true,
       stream: streamState,
+      streamFrames: stream.frames,
       ...store.status(),
       traders: jobs.tracker.stats,
       projects: projects.watch.stats,
