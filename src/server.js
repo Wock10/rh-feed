@@ -7,6 +7,7 @@ import { OpenSeaStream } from "./stream.js";
 import { OpenSeaRest } from "./rest.js";
 import { FeedStore } from "./store.js";
 import { normalizeStreamEvent } from "./normalize.js";
+import { TraderJobs } from "./jobs.js";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 dotenv.config({ path: path.join(ROOT, ".env") });
@@ -27,6 +28,7 @@ const MIME = {
 const store = new FeedStore({ dataDir: path.join(ROOT, "data") });
 const rest = new OpenSeaRest(process.env);
 const stream = new OpenSeaStream({ apiKey: rest.keys[0], chain: CHAIN });
+const jobs = new TraderJobs({ dataDir: path.join(ROOT, "data"), rest });
 
 /** @type {Set<{ res: import('node:http').ServerResponse, types: Set<string>|null }>} */
 const clients = new Set();
@@ -119,6 +121,7 @@ function pumpResolve() {
         url: `https://opensea.io/${encodeURIComponent(slug)}`,
       };
       store.setAccount(addr, row);
+      jobs.setAccount(addr, row);
       const data = JSON.stringify({ address: addr, ...row });
       for (const client of clients) {
         client.res.write(`event: profile\ndata: ${data}\n\n`);
@@ -144,6 +147,7 @@ stream.on("event", (eventName, payload) => {
   if (!event) return;
   const kept = store.ingest(event);
   if (!kept) return;
+  if (kept.type === "sale" || kept.type === "mint") jobs.ingest(kept);
   broadcast(kept);
   if (kept.type === "sale" || kept.type === "mint") {
     enqueueResolve(store.unknownAddresses([kept], 8));
@@ -161,7 +165,16 @@ stream.on("error", (err) => {
 
 async function handleApi(req, res, url) {
   if (req.method === "GET" && url.pathname === "/api/health") {
-    return json(res, 200, { ok: true, stream: streamState, ...store.status() });
+    return json(res, 200, {
+      ok: true,
+      stream: streamState,
+      ...store.status(),
+      traders: jobs.tracker.stats,
+    });
+  }
+
+  if (req.method === "GET" && url.pathname === "/api/traders") {
+    return json(res, 200, jobs.payload(new Set(store.mutes.keys())));
   }
 
   if (req.method === "GET" && url.pathname === "/api/snapshot") {
@@ -174,6 +187,7 @@ async function handleApi(req, res, url) {
       noise: store.noiseBoard({ types }),
       heat: store.heat({ types }),
       sweeps: store.sweeps(),
+      traders: jobs.payload(new Set(store.mutes.keys())).traders,
       collections: store.listCollections(),
       status: { stream: streamState, ...store.status() },
     });
@@ -181,9 +195,12 @@ async function handleApi(req, res, url) {
 
   if (req.method === "GET" && url.pathname === "/api/trends") {
     const types = parseTypes(url);
+    const traders = jobs.payload(new Set(store.mutes.keys()));
     return json(res, 200, {
       heat: store.heat({ types }),
       sweeps: store.sweeps(),
+      traders: traders.traders,
+      traderStats: traders.stats,
     });
   }
 
@@ -256,6 +273,7 @@ async function handleApi(req, res, url) {
       noise: store.noiseBoard({ types }),
       heat: store.heat({ types: types ?? ["sale"] }),
       sweeps: store.sweeps(),
+      traders: jobs.payload(new Set(store.mutes.keys())).traders,
       collections: store.listCollections(),
       status: { stream: streamState, ...store.status() },
     };
@@ -319,6 +337,8 @@ const server = createServer(async (req, res) => {
 });
 
 await store.load();
+await jobs.load();
+jobs.start();
 if (!rest.hasKeys) {
   console.error("Set OPENSEA_API_KEY in .env");
   process.exit(1);
@@ -327,11 +347,14 @@ if (!rest.hasKeys) {
 stream.start();
 broadcastStatus();
 function broadcastTrends() {
+  const traders = jobs.payload(new Set(store.mutes.keys()));
   for (const client of clients) {
     const types = client.types ? [...client.types] : ["sale"];
     const data = JSON.stringify({
       heat: store.heat({ types: client.types ? types : ["sale"] }),
       sweeps: store.sweeps(),
+      traders: traders.traders,
+      traderStats: traders.stats,
     });
     client.res.write(`event: trends\ndata: ${data}\n\n`);
   }

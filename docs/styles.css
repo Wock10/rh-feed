@@ -227,6 +227,11 @@ body {
 .flag.sweep { background: rgba(245, 197, 66, 0.16); color: var(--offer); }
 .flag.organic { background: rgba(43, 196, 138, 0.1); color: #8ee7c0; }
 .flag.dump { background: rgba(255, 106, 122, 0.14); color: var(--danger); }
+.flag.hit { background: rgba(43, 196, 138, 0.16); color: var(--sale); }
+.pnl { font-variant-numeric: tabular-nums; font-weight: 600; font-size: 12px; }
+.pnl.up { color: var(--sale); }
+.pnl.down { color: var(--danger); }
+.row.wallet-hit { box-shadow: inset 3px 0 0 var(--offer); }
 .row.hot { box-shadow: inset 3px 0 0 var(--sale); }
 .row.sweep-row { background: rgba(245, 197, 66, 0.06); }
 .party a.known { color: var(--offer); }

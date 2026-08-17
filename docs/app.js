@@ -54,7 +54,9 @@ const state = {
   collections: [],
   heat: [],
   sweeps: [],
+  traders: [],
   focus: null,
+  wallet: null,
   minUsd: Number(localStorage.getItem(USD_KEY) ?? 0) || 0,
   alerts: localStorage.getItem(ALERT_KEY) === "1",
   paused: false,
@@ -81,6 +83,8 @@ const els = {
   toast: document.getElementById("toast"),
   heat: document.getElementById("heat"),
   sweeps: document.getElementById("sweeps"),
+  traders: document.getElementById("traders"),
+  traderCount: document.getElementById("trader-count"),
   minUsd: document.getElementById("min-usd"),
   alerts: document.getElementById("alerts"),
   gate: document.getElementById("key-gate"),
@@ -211,9 +215,11 @@ function applyHello(data) {
 function onTrends(data) {
   state.heat = data.heat ?? state.heat;
   state.sweeps = data.sweeps ?? state.sweeps;
-  if (state.alerts) pingNewSignals(state.heat, state.sweeps);
+  if (data.traders) state.traders = data.traders;
+  if (state.alerts) pingNewSignals(state.heat, state.sweeps, state.traders);
   renderHeat();
   renderSweeps();
+  renderTraders();
 }
 
 function pushEvent(event, fresh = false) {
@@ -276,6 +282,10 @@ function renderChips() {
     const name = state.heat.find((h) => h.slug === state.focus)?.name || state.focus;
     chips.push({ id: "focus", label: name });
   }
+  if (state.wallet) {
+    const row = state.traders.find((t) => t.address === state.wallet);
+    chips.push({ id: "wallet", label: row?.name || short(state.wallet) });
+  }
   els.chips.innerHTML = chips
     .map((c) => {
       const x = c.locked
@@ -294,6 +304,12 @@ function renderChips() {
         state.focus = null;
         renderChips();
         renderHeat();
+        renderRows();
+        return;
+      } else if (id === "wallet") {
+        state.wallet = null;
+        renderChips();
+        renderTraders();
         renderRows();
         return;
       } else if (state.types.size > 1) {
@@ -331,6 +347,7 @@ function visibleEvents() {
     if (types && !types.has(e.type)) return false;
     if (state.mutes.has(e.slug)) return false;
     if (state.focus && e.slug !== state.focus) return false;
+    if (state.wallet && e.from !== state.wallet && e.to !== state.wallet) return false;
     if (state.minUsd > 0 && e.type === "sale") {
       const usd = Number(e.price?.usd);
       if (!Number.isFinite(usd) || usd < state.minUsd) return false;
@@ -397,9 +414,11 @@ function rowHtml(e) {
   const colName = e.collectionName || e.slug;
   const heat = state.heat.find((h) => h.slug === e.slug);
   const flags = heat?.flags ?? [];
+  const hotAddrs = new Set(state.traders.map((t) => t.address));
   const flagClass = [
     flags.includes("hot") ? "hot" : "",
     flags.includes("sweep") ? "sweep-row" : "",
+    hotAddrs.has(e.to) || hotAddrs.has(e.from) ? "wallet-hit" : "",
   ]
     .filter(Boolean)
     .join(" ");
@@ -437,7 +456,7 @@ function party(addr, name, url) {
   if (!addr) return "—";
   const label = name || short(addr);
   const href = url || `https://opensea.io/${addr}`;
-  const known = KNOWN.has(String(label).toLowerCase());
+  const known = KNOWN.has(String(label).toLowerCase()) || state.traders.some((t) => t.address === addr);
   return `${avatar(addr)}<a class="${known ? "known" : ""}" href="${esc(href)}" target="_blank" rel="noreferrer">${esc(label)}</a>`;
 }
 
@@ -512,6 +531,47 @@ function renderSweeps() {
   });
 }
 
+function renderTraders() {
+  const rows = state.traders ?? [];
+  if (els.traderCount) els.traderCount.textContent = String(rows.length);
+  if (!els.traders) return;
+  if (!rows.length) {
+    els.traders.innerHTML = `<div class="hint">Ledger is filling from live sales. Early hits show once a collection 2.2x its first prints.</div>`;
+    return;
+  }
+  els.traders.innerHTML = rows
+    .map((t) => {
+      const label = t.name || short(t.address);
+      const bags = (t.bags ?? [])
+        .filter((b) => b.hot)
+        .map((b) => b.name)
+        .slice(0, 2)
+        .join(", ");
+      const flags = [];
+      if (t.earlyHits) flags.push(`<span class="flag hit">${t.earlyHits} early</span>`);
+      if (t.hitRate) flags.push(`<span class="flag organic">${t.hitRate}%</span>`);
+      return `<button type="button" class="heat-row${state.wallet === t.address ? " on" : ""}" data-wallet="${esc(t.address)}">
+        <span class="ph"></span>
+        <span class="heat-meta">
+          <span class="name">${esc(label)}</span>
+          <span class="sub"><span class="pnl ${t.realizedUsd >= 0 ? "up" : "down"}">${fmtPnl(t.realizedUsd)} pnl</span>
+          · <span class="pnl ${t.upnlUsd >= 0 ? "up" : "down"}">${fmtPnl(t.upnlUsd)} u</span>
+          ${bags ? ` · ${esc(bags)}` : ""}</span>
+        </span>
+        <span class="flags">${flags.join("")}</span>
+      </button>`;
+    })
+    .join("");
+  els.traders.querySelectorAll("[data-wallet]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      state.wallet = state.wallet === btn.dataset.wallet ? null : btn.dataset.wallet;
+      renderTraders();
+      renderChips();
+      renderRows();
+    });
+  });
+}
+
 function hydrateLocalMutes() {
   try {
     const rows = JSON.parse(localStorage.getItem(MUTE_KEY) ?? "[]");
@@ -534,10 +594,11 @@ function persistMutes() {
   localStorage.setItem(MUTE_KEY, JSON.stringify([...state.mutes.values()]));
 }
 
-function pingNewSignals(heat, sweeps) {
+function pingNewSignals(heat, sweeps, traders = []) {
   const hot = new Set([
     ...heat.filter((h) => h.flags?.some((f) => f === "hot" || f === "new" || f === "organic")).map((h) => h.slug),
     ...sweeps.map((s) => `${s.buyer}:${s.slug}`),
+    ...traders.filter((t) => t.earlyHits > 0).map((t) => `hit:${t.address}:${t.earlyHits}`),
   ]);
   let fresh = false;
   for (const id of hot) {
@@ -687,6 +748,15 @@ async function refreshNoise() {
   const data = await res.json();
   state.noise = data.noise ?? [];
   if (!state.search.trim()) renderResults();
+}
+
+function fmtPnl(n) {
+  const v = Number(n) || 0;
+  const abs = Math.abs(v);
+  const body = abs >= 1000 ? `$${(abs / 1000).toFixed(1)}k` : `$${Math.round(abs)}`;
+  if (v > 0) return `+${body}`;
+  if (v < 0) return `-${body}`;
+  return body;
 }
 
 function formatUsd(n) {

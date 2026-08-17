@@ -1,4 +1,5 @@
 import { normalizeStreamEvent } from "./normalize.js";
+import { TraderTracker } from "./tracker.js";
 
 const WS_URL = "wss://stream-api.opensea.io/socket/websocket";
 const EVENT_TYPES = [
@@ -11,6 +12,7 @@ const EVENT_TYPES = [
   "trait_offer",
 ];
 const MAX_EVENTS = 1500;
+const TRACKER_KEY = "rh-feed-tracker";
 
 function titleFromSlug(slug) {
   return String(slug ?? "")
@@ -299,6 +301,8 @@ export class RhFeedEngine {
     this.backoffMs = 1000;
     this.pending = [];
     this.streamState = "connecting";
+    this.tracker = loadTracker();
+    this.persistTimer = null;
   }
 
   on(name, fn) {
@@ -314,6 +318,7 @@ export class RhFeedEngine {
     this.connect();
     this.flushTimer = setInterval(() => this.flush(), 80);
     this.trendTimer = setInterval(() => this.emitTrends(), 2000);
+    this.persistTimer = setInterval(() => persistTracker(this.tracker), 30_000);
     this.emitHello();
   }
 
@@ -321,6 +326,8 @@ export class RhFeedEngine {
     this.closed = true;
     clearInterval(this.flushTimer);
     clearInterval(this.trendTimer);
+    clearInterval(this.persistTimer);
+    persistTracker(this.tracker);
     this.teardown();
   }
 
@@ -340,6 +347,11 @@ export class RhFeedEngine {
       noise: this.store.noiseBoard({ types: typeList }),
       heat: this.store.heat({ types: typeList ?? ["sale"] }),
       sweeps: this.store.sweeps(),
+      traders: this.tracker.board({
+        mutes: new Set(this.store.mutes.keys()),
+        limit: 16,
+      }),
+      traderStats: this.tracker.stats,
       collections: this.store.listCollections(),
       status: { stream: this.streamState, ...this.store.status() },
     };
@@ -353,6 +365,11 @@ export class RhFeedEngine {
     this.emit("trends", {
       heat: this.store.heat({ types: ["sale"] }),
       sweeps: this.store.sweeps(),
+      traders: this.tracker.board({
+        mutes: new Set(this.store.mutes.keys()),
+        limit: 16,
+      }),
+      traderStats: this.tracker.stats,
     });
   }
 
@@ -423,7 +440,9 @@ export class RhFeedEngine {
     const event = normalizeStreamEvent(eventName, payload);
     if (!event) return;
     const kept = this.store.ingest(event);
-    if (!kept || this.store.isMuted(kept.slug)) return;
+    if (!kept) return;
+    if (kept.type === "sale" || kept.type === "mint") this.tracker.ingest(kept);
+    if (this.store.isMuted(kept.slug)) return;
     this.pending.push(kept);
   }
 
@@ -451,6 +470,27 @@ export class RhFeedEngine {
         // ignore
       }
       this.ws = null;
+    }
+  }
+}
+
+function loadTracker() {
+  try {
+    return TraderTracker.fromJSON(JSON.parse(localStorage.getItem(TRACKER_KEY) ?? "null"));
+  } catch {
+    return new TraderTracker();
+  }
+}
+
+function persistTracker(tracker) {
+  try {
+    tracker.prune();
+    localStorage.setItem(TRACKER_KEY, JSON.stringify(tracker.toJSON()));
+  } catch {
+    try {
+      localStorage.removeItem(TRACKER_KEY);
+    } catch {
+      // ignore
     }
   }
 }
