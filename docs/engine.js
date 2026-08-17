@@ -297,6 +297,7 @@ export class RhFeedEngine {
     this.handlers = new Map();
     this.ws = null;
     this.heartbeat = null;
+    this.watchdog = null;
     this.reconnectTimer = null;
     this.flushTimer = null;
     this.trendTimer = null;
@@ -305,6 +306,7 @@ export class RhFeedEngine {
     this.backoffMs = 1000;
     this.pending = [];
     this.streamState = "connecting";
+    this.frameAt = 0;
     this.tracker = loadTracker();
     this.projects = new ProjectWatch();
     this.projectQueue = [];
@@ -416,11 +418,16 @@ export class RhFeedEngine {
     ws.addEventListener("open", () => {
       this.backoffMs = 1000;
       this.streamState = "live";
+      this.frameAt = Date.now();
       this.join();
       this.startHeartbeat();
+      this.startWatchdog();
       this.emit("status", { stream: "live", ...this.store.status() });
     });
-    ws.addEventListener("message", (ev) => this.onMessage(ev.data));
+    ws.addEventListener("message", (ev) => {
+      this.frameAt = Date.now();
+      this.onMessage(ev.data);
+    });
     ws.addEventListener("close", () => {
       this.streamState = "reconnecting";
       this.emit("status", { stream: "reconnecting", ...this.store.status() });
@@ -445,6 +452,17 @@ export class RhFeedEngine {
       if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
       this.send([null, String(this.ref++), "phoenix", "heartbeat", {}]);
     }, 25_000);
+  }
+
+  startWatchdog() {
+    clearInterval(this.watchdog);
+    this.watchdog = setInterval(() => {
+      if (this.closed || !this.ws) return;
+      if (Date.now() - this.frameAt < 15_000) return;
+      this.streamState = "reconnecting";
+      this.emit("status", { stream: "reconnecting", ...this.store.status() });
+      this.connect();
+    }, 5_000);
   }
 
   send(frame) {
@@ -492,6 +510,8 @@ export class RhFeedEngine {
   teardown(clearReconnect = true) {
     clearInterval(this.heartbeat);
     this.heartbeat = null;
+    clearInterval(this.watchdog);
+    this.watchdog = null;
     if (clearReconnect) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
