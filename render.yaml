@@ -1,15 +1,19 @@
 services:
   - type: web
     name: rh-feed
-    runtime: node
+    runtime: docker
     plan: free
-    buildCommand: npm ci
-    startCommand: npm start
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
     healthCheckPath: /api/health
     envVars:
-      - key: NODE_VERSION
-        value: "22"
+      - key: NODE_ENV
+        value: production
       - key: CHAIN
         value: robinhood
+      - key: PORT
+        value: "8788"
       - key: OPENSEA_API_KEY
+        sync: false
+      - key: MINT_WALLET_ADDRESS
         sync: false
