@@ -13,7 +13,7 @@ dotenv.config({ path: path.join(ROOT, ".env") });
 
 const PORT = Number(process.env.PORT ?? 8788);
 const CHAIN = process.env.CHAIN ?? "robinhood";
-const PUBLIC = path.join(ROOT, "public");
+const PUBLIC = path.join(ROOT, "docs");
 
 const MIME = {
   ".html": "text/html; charset=utf-8",

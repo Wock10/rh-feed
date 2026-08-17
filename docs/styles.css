@@ -409,6 +409,46 @@ body {
   z-index: 20;
 }
 
+.key-gate {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.72);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 30;
+}
+.key-gate form {
+  width: min(420px, calc(100% - 32px));
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  padding: 24px;
+}
+.key-gate h2 { margin: 0 0 8px; font-size: 18px; }
+.key-gate p { margin: 0 0 16px; color: var(--dim); }
+.key-gate input {
+  width: 100%;
+  border: 1px solid var(--line);
+  background: var(--bg);
+  color: var(--text);
+  border-radius: 10px;
+  padding: 10px 12px;
+  font: inherit;
+  margin-bottom: 12px;
+}
+.key-gate button {
+  width: 100%;
+  border: 0;
+  background: var(--blue);
+  color: #fff;
+  font: inherit;
+  font-weight: 600;
+  padding: 10px 12px;
+  border-radius: 10px;
+  cursor: pointer;
+}
+
 @keyframes insert {
   from { background: rgba(68, 149, 255, 0.12); }
   to { background: transparent; }

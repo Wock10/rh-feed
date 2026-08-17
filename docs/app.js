@@ -1,3 +1,5 @@
+import { RhFeedEngine } from "./engine.js";
+
 const TYPES = [
   { id: "all", label: "All" },
   { id: "sale", label: "Sale" },
@@ -41,6 +43,7 @@ const KNOWN = new Set([
 const MUTE_KEY = "rh-feed-mutes";
 const USD_KEY = "rh-feed-min-usd";
 const ALERT_KEY = "rh-feed-alerts";
+const KEY_STORE = "rh-feed-opensea-key";
 
 const state = {
   types: new Set(["sale"]),
@@ -55,6 +58,8 @@ const state = {
   minUsd: Number(localStorage.getItem(USD_KEY) ?? 0) || 0,
   alerts: localStorage.getItem(ALERT_KEY) === "1",
   paused: false,
+  backend: false,
+  engine: null,
   es: null,
   search: "",
   toastTimer: null,
@@ -78,11 +83,63 @@ const els = {
   sweeps: document.getElementById("sweeps"),
   minUsd: document.getElementById("min-usd"),
   alerts: document.getElementById("alerts"),
+  gate: document.getElementById("key-gate"),
+  keyForm: document.getElementById("key-form"),
+  openseaKey: document.getElementById("opensea-key"),
+  keyBtn: document.getElementById("key-btn"),
 };
 
 function typesParam() {
   if (state.allTypes) return "all";
   return [...state.types].join(",");
+}
+
+async function hasBackend() {
+  try {
+    const res = await fetch("/api/health", { cache: "no-store" });
+    const data = await res.json();
+    return Boolean(res.ok && data.ok);
+  } catch {
+    return false;
+  }
+}
+
+async function boot() {
+  renderTypes();
+  renderChips();
+  if (await hasBackend()) {
+    state.backend = true;
+    connect();
+    return;
+  }
+  const key = localStorage.getItem(KEY_STORE) ?? "";
+  els.keyBtn?.classList.remove("hidden");
+  if (!key) {
+    els.gate?.classList.remove("hidden");
+    return;
+  }
+  startEngine(key);
+}
+
+function startEngine(key) {
+  els.gate?.classList.add("hidden");
+  state.engine?.stop();
+  const engine = new RhFeedEngine({ apiKey: key });
+  state.engine = engine;
+  engine.on("hello", applyHello);
+  engine.on("events", (data) => {
+    if (state.paused) return;
+    for (let i = data.events.length - 1; i >= 0; i--) pushEvent(data.events[i], true);
+    renderRows();
+  });
+  engine.on("status", renderStatus);
+  engine.on("trends", onTrends);
+  engine.start();
+}
+
+function reconnectFeed() {
+  if (state.backend) connect();
+  else if (state.engine) applyHello(state.engine.snapshot(typesParam()));
 }
 
 function connect() {
@@ -137,6 +194,9 @@ function applyHello(data) {
   state.mutes = new Map((data.mutes ?? []).map((m) => [m.slug, m]));
   hydrateLocalMutes();
   persistMutes();
+  if (state.engine) {
+    for (const row of state.mutes.values()) state.engine.mute(row.slug, row.name);
+  }
   state.noise = data.noise ?? [];
   state.collections = data.collections ?? [];
   onTrends(data);
@@ -189,7 +249,7 @@ function renderTypes() {
       }
       renderTypes();
       renderChips();
-      connect();
+      reconnectFeed();
     });
     els.types.appendChild(btn);
   }
@@ -243,12 +303,20 @@ function renderChips() {
       }
       renderTypes();
       renderChips();
-      connect();
+      reconnectFeed();
     });
   });
 }
 
 async function reloadSnapshot() {
+  if (state.engine) {
+    const data = state.engine.snapshot(typesParam());
+    state.events = data.events ?? [];
+    state.noise = data.noise ?? [];
+    if (data.mutes) state.mutes = new Map(data.mutes.map((m) => [m.slug, m]));
+    if (data.collections) state.collections = data.collections;
+    return;
+  }
   const res = await fetch(`/api/snapshot?types=${encodeURIComponent(typesParam())}&limit=120`);
   const data = await res.json();
   state.events = data.events ?? [];
@@ -451,6 +519,7 @@ function hydrateLocalMutes() {
     for (const row of rows) {
       if (row?.slug) state.mutes.set(row.slug, row);
     }
+    if (!state.backend) return;
     fetch("/api/mutes/bulk", {
       method: "PUT",
       headers: { "content-type": "application/json" },
@@ -569,6 +638,10 @@ async function mute(slug, name) {
   renderMutes();
   renderResults();
   renderRows();
+  if (state.engine) {
+    state.engine.mute(slug, name);
+    return;
+  }
   await fetch("/api/mutes", {
     method: "PUT",
     headers: { "content-type": "application/json" },
@@ -581,6 +654,12 @@ async function unmute(slug) {
   persistMutes();
   renderMutes();
   renderResults();
+  if (state.engine) {
+    state.engine.unmute(slug);
+    await reloadSnapshot();
+    renderRows();
+    return;
+  }
   await fetch(`/api/mutes/${encodeURIComponent(slug)}`, { method: "DELETE" });
   await reloadSnapshot();
   renderRows();
@@ -598,6 +677,12 @@ function showToast(message, onUndo) {
 }
 
 async function refreshNoise() {
+  if (state.engine) {
+    const data = state.engine.snapshot(typesParam());
+    state.noise = data.noise ?? [];
+    if (!state.search.trim()) renderResults();
+    return;
+  }
   const res = await fetch(`/api/noise?types=${encodeURIComponent(typesParam())}`);
   const data = await res.json();
   state.noise = data.noise ?? [];
@@ -667,6 +752,18 @@ setInterval(() => {
 }, 1000);
 setInterval(refreshNoise, 4000);
 
+els.keyForm?.addEventListener("submit", (ev) => {
+  ev.preventDefault();
+  const key = els.openseaKey.value.trim();
+  if (!key) return;
+  localStorage.setItem(KEY_STORE, key);
+  startEngine(key);
+});
+els.keyBtn?.addEventListener("click", () => {
+  els.gate?.classList.remove("hidden");
+  els.openseaKey.value = localStorage.getItem(KEY_STORE) ?? "";
+});
+
 renderTypes();
 renderChips();
-connect();
+boot();
