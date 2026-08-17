@@ -43,33 +43,33 @@
           <p class="hint">Early on collections that later ran. PnL is realized, uPnL is leftover bags marked at last sales. Click to isolate.</p>
           <div id="traders" class="heat-list"></div>
         </section>
-        <section>
+        <section class="panel">
           <h2>New projects <span id="project-count">0</span></h2>
           <p class="hint">New collections only. Hover for OpenSea stats and confidence. Ask only if still ambiguous.</p>
           <div id="projects" class="heat-list"></div>
         </section>
-        <section>
+        <section class="panel">
           <h2>Heat</h2>
           <p class="hint">Velocity vs 15m. HOT = accel. NEW = first seen. ORGANIC = many unique buyers. DUMP = listings with no sales. Click to isolate.</p>
           <div id="heat" class="heat-list"></div>
         </section>
-        <section>
+        <section class="aux">
           <h2>Sweeps</h2>
           <div id="sweeps" class="heat-list"></div>
         </section>
-        <section>
+        <section class="aux">
           <h2>Status</h2>
           <div id="type-filters" class="switches"></div>
         </section>
-        <label class="min-usd">
+        <label class="min-usd aux">
           Hide under $
           <input id="min-usd" type="number" min="0" step="0.5" value="0" />
         </label>
-        <label class="alert-toggle">
+        <label class="alert-toggle aux">
           <input id="alerts" type="checkbox" />
           Sound on heat and sweeps
         </label>
-        <section>
+        <section class="aux">
           <h2>Collections</h2>
           <label class="search">
             <input
@@ -81,7 +81,7 @@
           </label>
           <div id="col-results" class="col-list"></div>
         </section>
-        <section>
+        <section class="aux">
           <h2>Muted <span id="muted-count">0</span></h2>
           <div id="muted" class="col-list"></div>
         </section>
