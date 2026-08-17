@@ -9,8 +9,6 @@ services:
     envVars:
       - key: NODE_VERSION
         value: "22"
-      - key: PORT
-        value: "8788"
       - key: CHAIN
         value: robinhood
       - key: OPENSEA_API_KEY
