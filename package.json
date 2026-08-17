@@ -1,0 +1,17 @@
+{
+  "name": "rh-feed",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Live Robinhood Chain OpenSea activity feed with collection mutes",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "dotenv": "^16.6.1"
+  }
+}

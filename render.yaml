@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: rh-feed
+    runtime: node
+    plan: free
+    buildCommand: npm ci
+    startCommand: npm start
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: PORT
+        value: "8788"
+      - key: CHAIN
+        value: robinhood
+      - key: OPENSEA_API_KEY
+        sync: false

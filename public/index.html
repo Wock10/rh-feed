@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Activity | RH feed</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div class="app">
+      <header class="top">
+        <div class="brand">
+          <h1>Activity</h1>
+          <span class="chain-tag">Robinhood Chain</span>
+        </div>
+        <div class="hud">
+          <span id="stream-pill" class="pill wait">connecting</span>
+          <span class="stat"><b id="rate">0</b>/min</span>
+          <button id="pause-btn" type="button" class="ghost">Pause</button>
+        </div>
+      </header>
+
+      <aside class="rail">
+        <section>
+          <h2>Heat</h2>
+          <p class="hint">Velocity vs 15m. HOT = accel. NEW = first seen. ORGANIC = many unique buyers. DUMP = listings with no sales. Click to isolate.</p>
+          <div id="heat" class="heat-list"></div>
+        </section>
+        <section>
+          <h2>Sweeps</h2>
+          <div id="sweeps" class="heat-list"></div>
+        </section>
+        <section>
+          <h2>Status</h2>
+          <div id="type-filters" class="switches"></div>
+        </section>
+        <label class="min-usd">
+          Hide under $
+          <input id="min-usd" type="number" min="0" step="0.5" value="0" />
+        </label>
+        <label class="alert-toggle">
+          <input id="alerts" type="checkbox" />
+          Sound on heat and sweeps
+        </label>
+        <section>
+          <h2>Collections</h2>
+          <label class="search">
+            <input
+              id="col-search"
+              type="search"
+              placeholder="Search to mute"
+              autocomplete="off"
+            />
+          </label>
+          <div id="col-results" class="col-list"></div>
+        </section>
+        <section>
+          <h2>Muted <span id="muted-count">0</span></h2>
+          <div id="muted" class="col-list"></div>
+        </section>
+      </aside>
+
+      <main class="feed">
+        <div class="chips-row" id="chips-row"></div>
+        <div class="table-head">
+          <span>Event</span>
+          <span>Item</span>
+          <span>Price</span>
+          <span>Qty</span>
+          <span>From</span>
+          <span>To</span>
+          <span>Time</span>
+        </div>
+        <div id="rows" class="rows"></div>
+        <div id="empty" class="empty hidden">No matching activity. Mute fewer collections or pick another status.</div>
+      </main>
+    </div>
+    <div id="toast" class="toast hidden"></div>
+    <script src="/app.js"></script>
+  </body>
+</html>
