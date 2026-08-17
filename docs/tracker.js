@@ -76,6 +76,7 @@ export class TraderTracker {
     if (!wallet || !profile) return;
     if (profile.name) wallet.name = profile.name;
     if (profile.url) wallet.url = profile.url;
+    if (profile.image) wallet.image = profile.image;
   }
 
   touchCollection(event, usd) {
@@ -140,6 +141,7 @@ export class TraderTracker {
         address,
         name: null,
         url: `https://opensea.io/${address}`,
+        image: null,
         buys: 0,
         sells: 0,
         mints: 0,
@@ -184,6 +186,7 @@ export class TraderTracker {
       wallet.name = event.toName;
       if (event.toUrl) wallet.url = event.toUrl;
     }
+    if (event.toImage) wallet.image = event.toImage;
     const early = this.isEarly(col, event);
     if (early) {
       wallet.earlyBuys.add(event.slug);
@@ -208,6 +211,7 @@ export class TraderTracker {
       wallet.name = event.fromName;
       if (event.fromUrl) wallet.url = event.fromUrl;
     }
+    if (event.fromImage) wallet.image = event.fromImage;
     const bags = wallet.bags.get(event.slug);
     const key = tokenKey(event);
     const lot = bags?.get(key);
@@ -280,6 +284,7 @@ export class TraderTracker {
         address: wallet.address,
         name: wallet.name,
         url: wallet.url,
+        image: wallet.image || null,
         realizedUsd,
         upnlUsd: upnl,
         totalUsd: Math.round((realizedUsd + upnl) * 100) / 100,
@@ -335,6 +340,7 @@ export class TraderTracker {
         address: w.address,
         name: w.name,
         url: w.url,
+        image: w.image || null,
         buys: w.buys,
         sells: w.sells,
         mints: w.mints,

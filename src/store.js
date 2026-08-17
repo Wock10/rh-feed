@@ -17,7 +17,7 @@ export class FeedStore {
     this.mutes = new Map();
     /** @type {Map<string, { name: string, image: string|null }>} */
     this.collections = new Map();
-    /** @type {Map<string, { name: string|null, url: string }>} */
+    /** @type {Map<string, { name: string|null, url: string, image: string|null }>} */
     this.accounts = new Map();
     /** @type {{ slug: string, type: string, ts: number }[]} */
     this.noise = [];
@@ -123,8 +123,28 @@ export class FeedStore {
       this.seen = new Map(this.events.map((e) => [e.id, e.ts]));
     }
     this.stats.kept += 1;
+    this.rememberParty(event.from, {
+      name: event.fromName,
+      url: event.fromUrl,
+      image: event.fromImage,
+    });
+    this.rememberParty(event.to, {
+      name: event.toName,
+      url: event.toUrl,
+      image: event.toImage,
+    });
     this.applyProfiles(event);
     return event;
+  }
+
+  rememberParty(address, { name, url, image } = {}) {
+    if (!address) return;
+    const prev = this.accounts.get(address) ?? {};
+    this.accounts.set(address, {
+      name: name || prev.name || null,
+      url: url || prev.url || `https://opensea.io/${address}`,
+      image: image || prev.image || null,
+    });
   }
 
   applyProfiles(event) {
@@ -132,13 +152,10 @@ export class FeedStore {
       const addr = event[key];
       if (!addr) continue;
       const profile = this.accounts.get(addr);
-      if (profile) {
-        event[`${key}Name`] = profile.name;
-        event[`${key}Url`] = profile.url;
-      } else {
-        event[`${key}Name`] = null;
-        event[`${key}Url`] = `https://opensea.io/${addr}`;
-      }
+      if (!profile) continue;
+      if (profile.name) event[`${key}Name`] = profile.name;
+      if (profile.url) event[`${key}Url`] = profile.url;
+      if (profile.image) event[`${key}Image`] = profile.image;
     }
   }
 
@@ -305,6 +322,7 @@ export class FeedStore {
       row.count += 1;
       if (Number.isFinite(event.price?.usd)) row.usd += event.price.usd;
       if (event.toName) row.buyerName = event.toName;
+      if (event.toImage) row.buyerImage = event.toImage;
     }
     return [...groups.values()]
       .filter((row) => row.count >= min)
@@ -318,15 +336,24 @@ export class FeedStore {
 
   setAccount(address, profile) {
     const addr = address.toLowerCase();
-    this.accounts.set(addr, profile);
+    const prev = this.accounts.get(addr) ?? {};
+    const next = {
+      name: profile.name ?? prev.name ?? null,
+      url: profile.url || prev.url || `https://opensea.io/${addr}`,
+      image: profile.image || prev.image || null,
+      resolved: profile.resolved ?? prev.resolved ?? false,
+    };
+    this.accounts.set(addr, next);
     for (const event of this.events) {
       if (event.from === addr) {
-        event.fromName = profile.name;
-        event.fromUrl = profile.url;
+        if (next.name) event.fromName = next.name;
+        event.fromUrl = next.url;
+        if (next.image) event.fromImage = next.image;
       }
       if (event.to === addr) {
-        event.toName = profile.name;
-        event.toUrl = profile.url;
+        if (next.name) event.toName = next.name;
+        event.toUrl = next.url;
+        if (next.image) event.toImage = next.image;
       }
     }
   }
@@ -336,7 +363,9 @@ export class FeedStore {
     const seen = new Set();
     for (const event of events) {
       for (const addr of [event.from, event.to]) {
-        if (!addr || seen.has(addr) || this.accounts.has(addr)) continue;
+        if (!addr || seen.has(addr)) continue;
+        const profile = this.accounts.get(addr);
+        if (profile?.name || profile?.resolved) continue;
         seen.add(addr);
         out.push(addr);
         if (out.length >= cap) return out;

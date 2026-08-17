@@ -97,6 +97,18 @@ function partyName(account) {
   return account.username || account.user?.username || account.ens_name || account.display_name || null;
 }
 
+function partyImage(account) {
+  if (!account || typeof account !== "object") return null;
+  return (
+    account.profile_img_url ||
+    account.profile_image_url ||
+    account.image_url ||
+    account.user?.profile_img_url ||
+    account.user?.profile_image_url ||
+    null
+  );
+}
+
 function titleFromSlug(slug) {
   return String(slug ?? "")
     .replace(/-\d{5,}$/, "")
@@ -130,6 +142,8 @@ export function normalizeStreamEvent(eventName, framePayload) {
     null;
   const fromName = partyName(inner.from_account) || partyName(inner.maker);
   const toName = partyName(inner.to_account) || partyName(inner.taker);
+  const fromImage = partyImage(inner.from_account) || partyImage(inner.maker);
+  const toImage = partyImage(inner.to_account) || partyImage(inner.taker);
   const price = priceFromStream(inner);
   const tokenId = ids.tokenId || item.identifier || "";
   const name = item.metadata?.name || (tokenId ? `#${tokenId}` : slug || "Unknown");
@@ -157,6 +171,8 @@ export function normalizeStreamEvent(eventName, framePayload) {
     to: to ? lc(to) : null,
     fromName,
     toName,
+    fromImage,
+    toImage,
     fromUrl: fromName ? `https://opensea.io/${encodeURIComponent(fromName)}` : from ? `https://opensea.io/${lc(from)}` : null,
     toUrl: toName ? `https://opensea.io/${encodeURIComponent(toName)}` : to ? `https://opensea.io/${lc(to)}` : null,
     quantity: Number(inner.quantity ?? 1) || 1,

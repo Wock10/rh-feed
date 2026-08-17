@@ -40,10 +40,34 @@ const KNOWN = new Set([
   "press_sell",
 ]);
 
+const FLAG_HELP = {
+  hot: "Sales accelerating vs the last 15 minutes",
+  new: "First seen in the last 20 minutes, with sales",
+  organic: "Many unique buyers, not one wallet stuffing prints",
+  dump: "Lots of listings, almost no sales",
+  sweep: "Same wallet bought 3+ in about 40 seconds",
+  hit: "Got in early on a collection that later pumped",
+  live: "Drop is minting now",
+  soon: "Upcoming stage, not live yet",
+  free: "Native price is 0",
+  paid: "Mint has a price",
+  you: "Your mint wallet can mint the active stage",
+  lock: "Allowlist / not eligible",
+  gated: "Allowlist or private stage",
+  public: "Public mint stage",
+  gas: "Eligible, but the wallet is short on balance",
+  low: "Supply almost gone",
+  thin: "Site / Twitter look thin",
+  vapor: "Site / Twitter look parked or fake",
+  ok: "Project looks real enough",
+  queued: "Still scraping",
+};
+
 const MUTE_KEY = "rh-feed-mutes";
 const USD_KEY = "rh-feed-min-usd";
 const ALERT_KEY = "rh-feed-alerts";
 const KEY_STORE = "rh-feed-opensea-key";
+const MINT_WALLET_KEY = "rh-feed-mint-wallet";
 
 const state = {
   types: new Set(["sale"]),
@@ -57,9 +81,12 @@ const state = {
   traders: [],
   projects: [],
   projectStats: {},
+  mints: [],
+  mintStats: {},
   promptText: "",
   focus: null,
   wallet: null,
+  user: null,
   minUsd: Number(localStorage.getItem(USD_KEY) ?? 0) || 0,
   alerts: localStorage.getItem(ALERT_KEY) === "1",
   paused: false,
@@ -90,8 +117,16 @@ const els = {
   traderCount: document.getElementById("trader-count"),
   projects: document.getElementById("projects"),
   projectCount: document.getElementById("project-count"),
+  mints: document.getElementById("mints"),
+  mintCount: document.getElementById("mint-count"),
+  mintWallet: document.getElementById("mint-wallet"),
+  mintWalletRow: document.getElementById("mint-wallet-row"),
   promptBtn: document.getElementById("prompt-btn"),
   promptDrawer: document.getElementById("prompt-drawer"),
+  keysBtn: document.getElementById("keys-btn"),
+  keysDrawer: document.getElementById("keys-drawer"),
+  keysClose: document.getElementById("keys-close"),
+  userCard: document.getElementById("user-card"),
   promptText: document.getElementById("prompt-text"),
   promptSave: document.getElementById("prompt-save"),
   promptClose: document.getElementById("prompt-close"),
@@ -130,6 +165,15 @@ async function boot() {
   }
   const key = localStorage.getItem(KEY_STORE) ?? "";
   els.keyBtn?.classList.remove("hidden");
+  els.mintWalletRow?.classList.remove("hidden");
+  if (els.mintWallet) {
+    els.mintWallet.value = localStorage.getItem(MINT_WALLET_KEY) ?? "";
+    els.mintWallet.addEventListener("change", () => {
+      const addr = els.mintWallet.value.trim();
+      localStorage.setItem(MINT_WALLET_KEY, addr);
+      state.engine?.setMintWallet(addr);
+    });
+  }
   await loadPrompt();
   if (!key) {
     els.gate?.classList.remove("hidden");
@@ -143,6 +187,7 @@ function startEngine(key) {
   state.engine?.stop();
   const engine = new RhFeedEngine({ apiKey: key });
   state.engine = engine;
+  engine.setMintWallet(localStorage.getItem(MINT_WALLET_KEY) ?? "");
   engine.on("hello", applyHello);
   engine.on("events", (data) => {
     if (state.paused) return;
@@ -194,12 +239,14 @@ function connect() {
     const p = JSON.parse(ev.data);
     for (const event of state.events) {
       if (event.from === p.address) {
-        event.fromName = p.name;
-        event.fromUrl = p.url;
+        event.fromName = p.name || event.fromName;
+        event.fromUrl = p.url || event.fromUrl;
+        if (p.image) event.fromImage = p.image;
       }
       if (event.to === p.address) {
-        event.toName = p.name;
-        event.toUrl = p.url;
+        event.toName = p.name || event.toName;
+        event.toUrl = p.url || event.toUrl;
+        if (p.image) event.toImage = p.image;
       }
     }
     renderRows();
@@ -231,11 +278,14 @@ function onTrends(data) {
   if (data.traders) state.traders = data.traders;
   if (data.projects) state.projects = data.projects;
   if (data.projectStats) state.projectStats = data.projectStats;
-  if (state.alerts) pingNewSignals(state.heat, state.sweeps, state.traders);
+  if (data.mints) state.mints = data.mints;
+  if (data.mintStats) state.mintStats = data.mintStats;
+  if (state.alerts) pingNewSignals(state.heat, state.sweeps, state.traders, state.mints);
   renderHeat();
   renderSweeps();
   renderTraders();
   renderProjects();
+  renderMints();
 }
 
 function pushEvent(event, fresh = false) {
@@ -324,8 +374,10 @@ function renderChips() {
         return;
       } else if (id === "wallet") {
         state.wallet = null;
+        state.user = null;
         renderChips();
         renderTraders();
+        renderUserCard();
         renderRows();
         return;
       } else if (state.types.size > 1) {
@@ -387,8 +439,9 @@ function renderRows() {
       if (time) time.innerHTML = timeHtml(event);
       const from = existing.querySelector("[data-side=from]");
       const to = existing.querySelector("[data-side=to]");
-      if (from) from.innerHTML = party(event.from, event.fromName, event.fromUrl);
-      if (to) to.innerHTML = party(event.to, event.toName, event.toUrl);
+      if (from) from.innerHTML = party(event.from, event.fromName, event.fromUrl, event.fromImage);
+      if (to) to.innerHTML = party(event.to, event.toName, event.toUrl, event.toImage);
+      bindRowUsers(existing);
       existing.classList.toggle("fresh", Boolean(event.fresh));
       event.fresh = false;
       if (anchor !== existing) els.rows.insertBefore(existing, anchor);
@@ -399,9 +452,99 @@ function renderRows() {
     wrap.innerHTML = rowHtml(event);
     const node = wrap.firstElementChild;
     bindRowMute(node);
+    bindRowUsers(node);
     els.rows.insertBefore(node, anchor);
     anchor = node.nextSibling;
   }
+}
+
+function openUser(address) {
+  const addr = String(address || "").toLowerCase();
+  if (!addr) return;
+  if (state.wallet === addr && state.user?.address === addr) {
+    state.wallet = null;
+    state.user = null;
+    renderChips();
+    renderTraders();
+    renderUserCard();
+    renderRows();
+    return;
+  }
+  state.wallet = addr;
+  renderChips();
+  renderTraders();
+  renderRows();
+  loadUser(addr);
+}
+
+async function loadUser(addr) {
+  try {
+    if (state.backend) {
+      const res = await fetch(`/api/users/${encodeURIComponent(addr)}`, { cache: "no-store" });
+      if (!res.ok) {
+        state.user = { address: addr, empty: true };
+        renderUserCard();
+        return;
+      }
+      state.user = await res.json();
+    } else {
+      state.user = state.engine?.users?.card(addr) ?? { address: addr, empty: true };
+    }
+  } catch {
+    state.user = { address: addr, empty: true };
+  }
+  renderUserCard();
+}
+
+function renderUserCard() {
+  if (!els.userCard) return;
+  const u = state.user;
+  if (!u || !state.wallet) {
+    els.userCard.classList.add("hidden");
+    els.userCard.innerHTML = "";
+    return;
+  }
+  els.userCard.classList.remove("hidden");
+  const name = u.name || short(u.address);
+  const pic = avatar(u.address, u.image, partyKind(u.address, u.name), name, false);
+  if (u.empty) {
+    els.userCard.innerHTML = `${pic}<div class="heat-meta"><span class="name">${esc(name)}</span><span class="sub">No local dossier yet. It fills when this wallet prints in the live feed.</span></div>`;
+    return;
+  }
+  const cols = (u.collections ?? [])
+    .slice(0, 4)
+    .map((c) => c.name || c.slug)
+    .join(", ");
+  const eth = [
+    u.ethIn ? `in ${formatAmt(u.ethIn)} ETH` : "",
+    u.ethOut ? `out ${formatAmt(u.ethOut)} ETH` : "",
+  ]
+    .filter(Boolean)
+    .join(" · ");
+  const usd = [
+    u.usdIn ? `in $${Math.round(u.usdIn)}` : "",
+    u.usdOut ? `out $${Math.round(u.usdOut)}` : "",
+  ]
+    .filter(Boolean)
+    .join(" · ");
+  els.userCard.innerHTML = `
+    ${pic}
+    <div class="heat-meta">
+      <span class="name">${esc(name)}</span>
+      <span class="sub">${esc(short(u.address))} · ${u.buys}b / ${u.sells}s / ${u.mints}m · ${u.collectionCount} cols · seen ${relTime(u.firstTs)}</span>
+      <span class="sub">${eth || "no ETH prints yet"}${usd ? ` · stables ${usd}` : ""}${cols ? ` · ${esc(cols)}` : ""}</span>
+    </div>
+    <a class="mute-btn" href="${esc(u.url)}" target="_blank" rel="noreferrer">OS</a>`;
+}
+
+function bindRowUsers(node) {
+  node.querySelectorAll("[data-wallet]").forEach((btn) => {
+    btn.addEventListener("click", (ev) => {
+      ev.preventDefault();
+      ev.stopPropagation();
+      openUser(btn.dataset.wallet);
+    });
+  });
 }
 
 function bindRowMute(node) {
@@ -418,11 +561,13 @@ function cssId(id) {
 }
 
 function rowHtml(e) {
-  const usd = e.price?.usd != null ? formatUsd(e.price.usd) : "—";
   const native =
     e.price?.amount != null
       ? `${formatAmt(e.price.amount)} ${e.price.symbol ?? ""}`.trim()
       : "";
+  const usd = e.price?.usd != null ? formatUsd(e.price.usd) : "";
+  const primary = native || usd || "—";
+  const secondary = native && usd ? usd : "";
   const img = e.image
     ? `<img class="thumb" src="${esc(e.image)}" alt="" />`
     : `<span class="thumb"></span>`;
@@ -439,7 +584,7 @@ function rowHtml(e) {
     .filter(Boolean)
     .join(" ");
   const badges = flags
-    .map((f) => `<span class="flag ${f}">${f}</span>`)
+    .map((f) => flagHtml(f))
     .join("");
   return `<article class="row ${esc(e.type)} ${flagClass}${e.fresh ? " fresh" : ""}" id="ev-${cssId(e.id)}" data-id="${esc(e.id)}">
     <div class="event">${icon}<span>${TYPE_LABEL[e.type] ?? e.type}</span></div>
@@ -454,10 +599,10 @@ function rowHtml(e) {
         </div>
       </div>
     </div>
-    <div class="price"><span class="usd">${usd}</span>${native ? `<span class="native">${esc(native)}</span>` : ""}</div>
+    <div class="price"><span class="native">${esc(primary)}</span>${secondary ? `<span class="usd">${esc(secondary)}</span>` : ""}</div>
     <div class="qty">${e.quantity ?? 1}</div>
-    <div class="party" data-side="from">${party(e.from, e.fromName, e.fromUrl)}</div>
-    <div class="party" data-side="to">${party(e.to, e.toName, e.toUrl)}</div>
+    <div class="party" data-side="from">${party(e.from, e.fromName, e.fromUrl, e.fromImage)}</div>
+    <div class="party" data-side="to">${party(e.to, e.toName, e.toUrl, e.toImage)}</div>
     <div class="time">${timeHtml(e)}</div>
   </article>`;
 }
@@ -468,18 +613,44 @@ function timeHtml(e) {
   return `<a href="${esc(e.txUrl)}" target="_blank" rel="noreferrer">${esc(label)}</a>`;
 }
 
-function party(addr, name, url) {
+function flagHtml(flag, label = flag) {
+  const help = FLAG_HELP[flag] || "";
+  return `<span class="flag ${esc(flag)}" title="${esc(help)}">${esc(label)}</span>`;
+}
+
+function partyKind(addr, name) {
+  const label = String(name || "").toLowerCase();
+  if (KNOWN.has(label)) return "known";
+  if (state.traders.some((t) => t.address === addr)) return "hot-trader";
+  return "";
+}
+
+function party(addr, name, url, image) {
   if (!addr) return "—";
   const label = name || short(addr);
   const href = url || `https://opensea.io/${addr}`;
-  const known = KNOWN.has(String(label).toLowerCase()) || state.traders.some((t) => t.address === addr);
-  return `${avatar(addr)}<a class="${known ? "known" : ""}" href="${esc(href)}" target="_blank" rel="noreferrer">${esc(label)}</a>`;
+  const kind = partyKind(addr, name);
+  const title =
+    kind === "known"
+      ? "Watchlist wallet"
+      : kind === "hot-trader"
+        ? "Hot wallet: early on collections that later ran"
+        : image
+          ? "OpenSea profile"
+          : "No OpenSea PFP yet. Color is a hash of the address, not a rank.";
+  return `${avatar(addr, image, kind, title, true)}<a class="${kind === "known" ? "known" : ""}" href="${esc(href)}" target="_blank" rel="noreferrer" title="${esc(title)}">${esc(label)}</a>`;
 }
 
-function avatar(addr) {
-  const hue = parseInt(String(addr).replace("0x", "").slice(0, 6), 16) % 360;
-  const letters = String(addr).slice(2, 4).toUpperCase();
-  return `<span class="avatar" style="background:hsl(${hue} 42% 32%)">${esc(letters)}</span>`;
+function avatar(addr, image, kind = "", title = "", clickable = false) {
+  const hue = parseInt(String(addr || "0x00").replace("0x", "").slice(0, 6), 16) % 360 || 0;
+  const letters = String(addr || "??").slice(2, 4).toUpperCase();
+  const cls = ["avatar", kind].filter(Boolean).join(" ");
+  const inner = image ? `<img src="${esc(image)}" alt="" />` : esc(letters);
+  const tag = clickable ? "button" : "span";
+  const extra = clickable
+    ? `type="button" data-wallet="${esc(addr)}"`
+    : "";
+  return `<${tag} class="${cls}" ${extra} title="${esc(title || "Local dossier")}" style="background:hsl(${hue} 42% 32%)">${inner}</${tag}>`;
 }
 
 function renderHeat() {
@@ -490,7 +661,7 @@ function renderHeat() {
   els.heat.innerHTML = state.heat
     .map((h) => {
       const flags = (h.flags ?? [])
-        .map((f) => `<span class="flag ${f}">${f}</span>`)
+        .map((f) => flagHtml(f))
         .join("");
       const delta =
         h.delta == null
@@ -513,6 +684,7 @@ function renderHeat() {
     btn.addEventListener("click", () => {
       state.focus = state.focus === btn.dataset.focus ? null : btn.dataset.focus;
       renderHeat();
+      renderMints();
       renderChips();
       renderRows();
     });
@@ -527,13 +699,19 @@ function renderSweeps() {
   els.sweeps.innerHTML = state.sweeps
     .map((s) => {
       const who = s.buyerName || short(s.buyer);
+      const pic = avatar(
+        s.buyer,
+        s.buyerImage,
+        partyKind(s.buyer, s.buyerName),
+        s.buyerName || short(s.buyer),
+      );
       return `<button type="button" class="heat-row" data-focus="${esc(s.slug)}">
-        <span class="ph"></span>
+        ${pic}
         <span class="heat-meta">
           <span class="name">${esc(s.name)}</span>
           <span class="sub">${esc(who)} bought ${s.count}${s.usd ? ` · $${s.usd}` : ""}</span>
         </span>
-        <span class="flags"><span class="flag sweep">sweep</span></span>
+        <span class="flags">${flagHtml("sweep")}</span>
       </button>`;
     })
     .join("");
@@ -564,10 +742,11 @@ function renderTraders() {
         .slice(0, 2)
         .join(", ");
       const flags = [];
-      if (t.earlyHits) flags.push(`<span class="flag hit">${t.earlyHits} early</span>`);
-      if (t.hitRate) flags.push(`<span class="flag organic">${t.hitRate}%</span>`);
+      if (t.earlyHits) flags.push(flagHtml("hit", `${t.earlyHits} early`));
+      if (t.hitRate) flags.push(flagHtml("organic", `${t.hitRate}%`));
+      const pic = avatar(t.address, t.image, "hot-trader", t.name || short(t.address));
       return `<button type="button" class="heat-row${state.wallet === t.address ? " on" : ""}" data-wallet="${esc(t.address)}">
-        <span class="ph"></span>
+        ${pic}
         <span class="heat-meta">
           <span class="name">${esc(label)}</span>
           <span class="sub"><span class="pnl ${t.realizedUsd >= 0 ? "up" : "down"}">${fmtPnl(t.realizedUsd)} pnl</span>
@@ -578,9 +757,15 @@ function renderTraders() {
       </button>`;
     })
     .join("");
-  els.traders.querySelectorAll("[data-wallet]").forEach((btn) => {
+  els.traders.querySelectorAll(".heat-row[data-wallet]").forEach((btn) => {
     btn.addEventListener("click", () => {
-      state.wallet = state.wallet === btn.dataset.wallet ? null : btn.dataset.wallet;
+      const addr = btn.dataset.wallet;
+      state.wallet = state.wallet === addr ? null : addr;
+      if (state.wallet) openUser(state.wallet);
+      else {
+        state.user = null;
+        renderUserCard();
+      }
       renderTraders();
       renderChips();
       renderRows();
@@ -601,7 +786,7 @@ function renderProjects() {
     .map((p) => {
       const flags = (p.flags ?? [])
         .slice(0, 3)
-        .map((f) => `<span class="flag thin">${esc(f)}</span>`)
+        .map((f) => flagHtml("thin", f))
         .join("");
       const links = [
         p.website ? `<a href="${esc(p.website)}" target="_blank" rel="noreferrer">site</a>` : "",
@@ -616,7 +801,7 @@ function renderProjects() {
           <span class="sub">${p.ageMin}m · ${links}${p.llm?.why ? ` · ${esc(p.llm.why)}` : ""}</span>
         </button>
         <span class="proj-actions">
-          <span class="flag ${esc(p.verdict)}">${esc(p.verdict)}</span>
+          <span class="flag ${esc(p.verdict)}" title="${esc(FLAG_HELP[p.verdict] || "")}">${esc(p.verdict)}</span>
           ${flags}
           <button type="button" class="mute-btn" data-pack="${esc(p.slug)}">Copy</button>
           ${canAsk ? `<button type="button" class="mute-btn" data-ask="${esc(p.slug)}">Ask</button>` : ""}
@@ -629,6 +814,7 @@ function renderProjects() {
       state.focus = state.focus === btn.dataset.focus ? null : btn.dataset.focus;
       renderProjects();
       renderHeat();
+      renderMints();
       renderChips();
       renderRows();
     });
@@ -638,6 +824,63 @@ function renderProjects() {
   });
   els.projects.querySelectorAll("[data-ask]").forEach((btn) => {
     btn.addEventListener("click", () => askProject(btn.dataset.ask));
+  });
+}
+
+function shortWallet(addr) {
+  const a = String(addr ?? "");
+  if (a.length < 12) return a;
+  return `${a.slice(0, 6)}…${a.slice(-4)}`;
+}
+
+function renderMints() {
+  const rows = state.mints ?? [];
+  if (els.mintCount) els.mintCount.textContent = String(rows.length);
+  if (!els.mints) return;
+  const wallet = state.mintStats?.wallet;
+  if (!rows.length) {
+    const who = wallet ? ` Checking ${shortWallet(wallet)}.` : "";
+    els.mints.innerHTML = `<div class="hint">Scanning OpenSea drops and new RH collections.${who}</div>`;
+    return;
+  }
+  els.mints.innerHTML = rows
+    .map((m) => {
+      const flags = (m.flags ?? [])
+        .filter((f) => f !== "paid")
+        .slice(0, 4)
+        .map((f) => flagHtml(f, f === "you" ? "you" : f))
+        .join("");
+      const img = m.image
+        ? `<img src="${esc(m.image)}" alt="" />`
+        : `<span class="ph"></span>`;
+      const bits = [
+        m.priceLabel || "—",
+        m.when,
+        m.supply,
+        m.stageType,
+        m.eligibleReason && m.eligibleReason !== "not eligible" ? m.eligibleReason : "",
+      ]
+        .filter(Boolean)
+        .join(" · ");
+      return `<button type="button" class="heat-row${state.focus === m.slug ? " on" : ""}" data-focus="${esc(m.slug)}">
+        ${img}
+        <span class="heat-meta">
+          <span class="name">${esc(m.name)}</span>
+          <span class="sub">${esc(bits)}</span>
+        </span>
+        <span class="flags">${flags}</span>
+      </button>`;
+    })
+    .join("");
+  els.mints.querySelectorAll("[data-focus]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      state.focus = state.focus === btn.dataset.focus ? null : btn.dataset.focus;
+      renderMints();
+      renderHeat();
+      renderProjects();
+      renderChips();
+      renderRows();
+    });
   });
 }
 
@@ -750,11 +993,14 @@ function persistMutes() {
   localStorage.setItem(MUTE_KEY, JSON.stringify([...state.mutes.values()]));
 }
 
-function pingNewSignals(heat, sweeps, traders = []) {
+function pingNewSignals(heat, sweeps, traders = [], mints = []) {
   const hot = new Set([
     ...heat.filter((h) => h.flags?.some((f) => f === "hot" || f === "new" || f === "organic")).map((h) => h.slug),
     ...sweeps.map((s) => `${s.buyer}:${s.slug}`),
     ...traders.filter((t) => t.earlyHits > 0).map((t) => `hit:${t.address}:${t.earlyHits}`),
+    ...mints
+      .filter((m) => m.status === "live" && (m.eligible === true || m.free))
+      .map((m) => `mint:${m.slug}:${m.eligible ? "you" : "free"}`),
   ]);
   let fresh = false;
   for (const id of hot) {
@@ -997,6 +1243,11 @@ els.promptBtn?.addEventListener("click", () => {
 });
 els.promptClose?.addEventListener("click", () => els.promptDrawer?.classList.add("hidden"));
 els.promptSave?.addEventListener("click", () => savePrompt());
+els.keysBtn?.addEventListener("click", () => els.keysDrawer?.classList.remove("hidden"));
+els.keysClose?.addEventListener("click", () => els.keysDrawer?.classList.add("hidden"));
+els.keysDrawer?.addEventListener("click", (ev) => {
+  if (ev.target === els.keysDrawer) els.keysDrawer.classList.add("hidden");
+});
 
 renderTypes();
 renderChips();

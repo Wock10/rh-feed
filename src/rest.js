@@ -34,7 +34,7 @@ export class OpenSeaRest {
     return this.keys[0];
   }
 
-  async get(pathname, params = {}) {
+  async request(pathname, { params = {}, method = "GET", body } = {}) {
     const url = new URL(`${API}${pathname}`);
     for (const [k, v] of Object.entries(params)) {
       if (v == null || v === "") continue;
@@ -44,8 +44,14 @@ export class OpenSeaRest {
     for (let attempt = 0; attempt < Math.max(3, this.keys.length); attempt++) {
       const key = this.nextKey();
       const res = await fetch(url, {
+        method,
         cache: "no-store",
-        headers: { accept: "application/json", "x-api-key": key },
+        headers: {
+          accept: "application/json",
+          "x-api-key": key,
+          ...(body ? { "content-type": "application/json" } : {}),
+        },
+        body: body ? JSON.stringify(body) : undefined,
       });
       const limit = Number(res.headers.get("x-ratelimit-remaining"));
       if (Number.isFinite(limit)) this.remaining.set(key, limit);
@@ -62,6 +68,14 @@ export class OpenSeaRest {
       return text ? JSON.parse(text) : null;
     }
     throw lastErr ?? new Error("OpenSea REST failed");
+  }
+
+  async get(pathname, params = {}) {
+    return this.request(pathname, { params });
+  }
+
+  async post(pathname, body) {
+    return this.request(pathname, { method: "POST", body });
   }
 
   async listChainCollections(chain, { maxPages = 4, limit = 100 } = {}) {
@@ -108,6 +122,66 @@ export class OpenSeaRest {
       return await this.get(`/accounts/${encodeURIComponent(address)}`);
     } catch (err) {
       if (String(err.message).includes("404")) return null;
+      throw err;
+    }
+  }
+
+  async listNewestCollections(chain, { limit = 40 } = {}) {
+    const data = await this.get("/collections", {
+      chain,
+      limit,
+      order_by: "created_date",
+    });
+    return data?.collections ?? [];
+  }
+
+  async listDrops({ type = "featured", chains, limit = 50, cursor } = {}) {
+    const data = await this.get("/drops", {
+      type,
+      limit,
+      chains,
+      cursor,
+    });
+    return {
+      drops: Array.isArray(data?.drops) ? data.drops : [],
+      next: data?.next ?? null,
+    };
+  }
+
+  async getDrop(slug) {
+    try {
+      return await this.get(`/drops/${encodeURIComponent(slug)}`);
+    } catch (err) {
+      if (String(err.message).includes("404")) return null;
+      throw err;
+    }
+  }
+
+  async checkMintEligibility(slug, minter, quantity = 1) {
+    try {
+      const data = await this.post(`/drops/${encodeURIComponent(slug)}/mint`, {
+        minter,
+        quantity,
+      });
+      return {
+        eligible: true,
+        reason: null,
+        value: data?.value ?? "0",
+      };
+    } catch (err) {
+      const msg = String(err?.message ?? err);
+      if (/not eligible/i.test(msg)) {
+        return { eligible: false, reason: "not eligible" };
+      }
+      if (/fully minted|sold out|no .*supply|insufficient supply/i.test(msg)) {
+        return { eligible: false, reason: "minted out" };
+      }
+      if (/insufficient balance/i.test(msg)) {
+        return { eligible: true, reason: "low balance" };
+      }
+      if (/OpenSea 404/.test(msg)) {
+        return { eligible: false, reason: "no drop" };
+      }
       throw err;
     }
   }

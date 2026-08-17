@@ -23,13 +23,22 @@
           <span id="stream-pill" class="pill wait">connecting</span>
           <span class="stat"><b id="rate">0</b>/min</span>
           <button id="pause-btn" type="button" class="ghost">Pause</button>
+          <button id="keys-btn" type="button" class="ghost">Keys</button>
           <button id="prompt-btn" type="button" class="ghost">Prompt</button>
           <button id="key-btn" type="button" class="ghost hidden">Key</button>
         </div>
       </header>
 
       <aside class="rail">
-        <section>
+        <section class="pin">
+          <h2>Mints <span id="mint-count">0</span></h2>
+          <p class="hint">Live and upcoming OpenSea drops on Robinhood. YOU = this wallet can mint the active stage. Click to isolate. No auto-mint.</p>
+          <div id="mint-wallet-row" class="mint-wallet hidden">
+            <input id="mint-wallet" type="text" placeholder="wallet for eligibility" autocomplete="off" spellcheck="false" />
+          </div>
+          <div id="mints" class="heat-list"></div>
+        </section>
+        <section class="pin">
           <h2>Hot wallets <span id="trader-count">0</span></h2>
           <p class="hint">Early on collections that later ran. PnL is realized, uPnL is leftover bags marked at last sales. Click to isolate.</p>
           <div id="traders" class="heat-list"></div>
@@ -80,6 +89,7 @@
 
       <main class="feed">
         <div class="chips-row" id="chips-row"></div>
+        <div id="user-card" class="user-card hidden"></div>
         <div class="table-head">
           <span>Event</span>
           <span>Item</span>
@@ -118,6 +128,82 @@
         </div>
       </div>
     </div>
-    <script type="module" src="./app.js"></script>
+    <div id="keys-drawer" class="prompt-drawer hidden">
+      <div class="prompt-card keys-card">
+        <div class="prompt-top">
+          <div>
+            <h2>Keys</h2>
+            <p class="hint">What the colors and flags mean. Hover any badge in the feed for the same text.</p>
+          </div>
+          <button id="keys-close" type="button" class="ghost">Close</button>
+        </div>
+        <div class="keys-grid">
+          <section>
+            <h3>Profiles</h3>
+            <dl>
+              <dt><span class="avatar known-swatch"></span> Gold name / gold ring</dt>
+              <dd>Watchlist wallet: 8888Sport, 44main, SteakTornado, prsFrg, press_sell.</dd>
+              <dt><span class="avatar hot-swatch"></span> Green ring</dt>
+              <dd>This wallet is on the Hot wallets board (early on collections that later ran).</dd>
+              <dt><span class="avatar"></span> Photo</dt>
+              <dd>OpenSea profile picture.</dd>
+              <dt><span class="avatar letter-swatch">AB</span> Letter circle</dt>
+              <dd>No PFP yet. Color is a hash of the address, not a rank.</dd>
+              <dt>Click avatar</dt>
+              <dd>Opens the local dossier for that wallet. Built from live feed only. No LLM.</dd>
+            </dl>
+          </section>
+          <section>
+            <h3>Row marks</h3>
+            <dl>
+              <dt><span class="key-bar sale"></span> Green bar</dt>
+              <dd>Collection is HOT right now.</dd>
+              <dt><span class="key-bar offer"></span> Gold bar</dt>
+              <dd>A Hot-wallets trader is in this trade.</dd>
+              <dt><span class="key-wash"></span> Yellow wash</dt>
+              <dd>Sweep: same buyer hitting this collection.</dd>
+            </dl>
+          </section>
+          <section>
+            <h3>Heat / sales</h3>
+            <dl>
+              <dt><span class="flag hot">hot</span></dt>
+              <dd>Sales accelerating vs the last 15 minutes.</dd>
+              <dt><span class="flag new">new</span></dt>
+              <dd>First seen in the last 20 minutes, with sales.</dd>
+              <dt><span class="flag organic">organic</span></dt>
+              <dd>Many unique buyers, not one wallet stuffing prints.</dd>
+              <dt><span class="flag dump">dump</span></dt>
+              <dd>Lots of listings, almost no sales.</dd>
+              <dt><span class="flag sweep">sweep</span></dt>
+              <dd>Same wallet bought 3+ in about 40 seconds.</dd>
+              <dt><span class="flag hit">early</span></dt>
+              <dd>Got in during the first 12 minutes or first 15 sales of a later pump.</dd>
+            </dl>
+          </section>
+          <section>
+            <h3>Mints / projects</h3>
+            <dl>
+              <dt><span class="flag live">live</span></dt>
+              <dd>Drop is minting now.</dd>
+              <dt><span class="flag soon">soon</span></dt>
+              <dd>Upcoming stage, not live yet.</dd>
+              <dt><span class="flag free">free</span></dt>
+              <dd>Native price is 0.</dd>
+              <dt><span class="flag you">you</span></dt>
+              <dd>Your mint wallet can mint the active stage.</dd>
+              <dt><span class="flag lock">lock</span></dt>
+              <dd>Allowlist / not eligible.</dd>
+              <dt><span class="flag gated">gated</span></dt>
+              <dd>Allowlist or private stage.</dd>
+              <dt><span class="flag gas">gas</span></dt>
+              <dd>Eligible, but the wallet is short on balance.</dd>
+              <dt><span class="flag thin">thin</span> <span class="flag vapor">vapor</span></dt>
+              <dd>Site / Twitter look weak or parked.</dd>
+            </dl>
+          </section>
+        </div>
+      </div>
+    </div>
   </body>
 </html>

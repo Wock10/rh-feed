@@ -1,4 +1,5 @@
 import { createServer } from "node:http";
+import { networkInterfaces } from "node:os";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -9,6 +10,8 @@ import { FeedStore } from "./store.js";
 import { normalizeStreamEvent } from "./normalize.js";
 import { TraderJobs } from "./jobs.js";
 import { ProjectJobs } from "./project-jobs.js";
+import { MintJobs } from "./mint-jobs.js";
+import { UserJobs } from "./user-jobs.js";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 dotenv.config({ path: path.join(ROOT, ".env") });
@@ -36,6 +39,12 @@ const projects = new ProjectJobs({
   docsDir: PUBLIC,
   rest,
 });
+const mints = new MintJobs({
+  dataDir: path.join(ROOT, "data"),
+  rest,
+  env: process.env,
+});
+const users = new UserJobs({ dataDir: path.join(ROOT, "data") });
 
 /** @type {Set<{ res: import('node:http').ServerResponse, types: Set<string>|null }>} */
 const clients = new Set();
@@ -105,7 +114,9 @@ function broadcastStatus() {
 
 function enqueueResolve(addresses) {
   for (const addr of addresses) {
-    if (!addr || store.accounts.has(addr) || resolveQueued.has(addr)) continue;
+    if (!addr || resolveQueued.has(addr)) continue;
+    const profile = store.accounts.get(addr);
+    if (profile?.name || profile?.resolved) continue;
     resolveQueued.add(addr);
     resolveQueue.push(addr);
   }
@@ -126,9 +137,16 @@ function pumpResolve() {
       const row = {
         name,
         url: `https://opensea.io/${encodeURIComponent(slug)}`,
+        image:
+          profile?.profile_image_url ||
+          profile?.profile_img_url ||
+          profile?.image_url ||
+          null,
+        resolved: true,
       };
       store.setAccount(addr, row);
       jobs.setAccount(addr, row);
+      users.setAccount(addr, row);
       const data = JSON.stringify({ address: addr, ...row });
       for (const client of clients) {
         client.res.write(`event: profile\ndata: ${data}\n\n`);
@@ -137,6 +155,8 @@ function pumpResolve() {
       store.setAccount(addr, {
         name: null,
         url: `https://opensea.io/${addr}`,
+        image: null,
+        resolved: true,
       });
       console.warn("account lookup failed", addr, err.message);
     } finally {
@@ -155,6 +175,7 @@ stream.on("event", (eventName, payload) => {
   const kept = store.ingest(event);
   if (!kept) return;
   if (kept.type === "sale" || kept.type === "mint") jobs.ingest(kept);
+  users.ingest(kept);
   projects.notice(kept);
   broadcast(kept);
   if (kept.type === "sale" || kept.type === "mint") {
@@ -179,11 +200,24 @@ async function handleApi(req, res, url) {
       ...store.status(),
       traders: jobs.tracker.stats,
       projects: projects.watch.stats,
+      mints: mints.watch.stats,
+      users: users.book.stats,
     });
+  }
+
+  if (req.method === "GET" && url.pathname.startsWith("/api/users/")) {
+    const addr = decodeURIComponent(url.pathname.slice("/api/users/".length)).toLowerCase();
+    const card = users.card(addr);
+    if (!card) return json(res, 404, { error: "unknown wallet" });
+    return json(res, 200, card);
   }
 
   if (req.method === "GET" && url.pathname === "/api/projects") {
     return json(res, 200, projects.payload());
+  }
+
+  if (req.method === "GET" && url.pathname === "/api/mints") {
+    return json(res, 200, mintPayload());
   }
 
   if (req.method === "GET" && url.pathname === "/api/prompt") {
@@ -230,6 +264,7 @@ async function handleApi(req, res, url) {
       sweeps: store.sweeps(),
       traders: jobs.payload(new Set(store.mutes.keys())).traders,
       projects: projects.payload().projects,
+      ...mintPayload(),
       collections: store.listCollections(),
       status: { stream: streamState, ...store.status() },
     });
@@ -239,6 +274,7 @@ async function handleApi(req, res, url) {
     const types = parseTypes(url);
     const traders = jobs.payload(new Set(store.mutes.keys()));
     const proj = projects.payload();
+    const mint = mintPayload();
     return json(res, 200, {
       heat: store.heat({ types }),
       sweeps: store.sweeps(),
@@ -246,6 +282,8 @@ async function handleApi(req, res, url) {
       traderStats: traders.stats,
       projects: proj.projects,
       projectStats: proj.stats,
+      mints: mint.mints,
+      mintStats: mint.stats,
     });
   }
 
@@ -320,6 +358,7 @@ async function handleApi(req, res, url) {
       sweeps: store.sweeps(),
       traders: jobs.payload(new Set(store.mutes.keys())).traders,
       projects: projects.payload().projects,
+      ...mintPayload(),
       collections: store.listCollections(),
       status: { stream: streamState, ...store.status() },
     };
@@ -385,8 +424,12 @@ const server = createServer(async (req, res) => {
 await store.load();
 await jobs.load();
 await projects.load();
+await mints.load();
+await users.load();
 jobs.start();
 projects.start();
+mints.start();
+users.start();
 if (!rest.hasKeys) {
   console.error("Set OPENSEA_API_KEY in .env");
   process.exit(1);
@@ -394,9 +437,17 @@ if (!rest.hasKeys) {
 
 stream.start();
 broadcastStatus();
+function mintPayload() {
+  return mints.payload({
+    heat: store.heat({ types: ["sale"] }),
+    projects: projects.payload().projects,
+  });
+}
+
 function broadcastTrends() {
   const traders = jobs.payload(new Set(store.mutes.keys()));
   const proj = projects.payload();
+  const mint = mintPayload();
   for (const client of clients) {
     const types = client.types ? [...client.types] : ["sale"];
     const data = JSON.stringify({
@@ -406,6 +457,8 @@ function broadcastTrends() {
       traderStats: traders.stats,
       projects: proj.projects,
       projectStats: proj.stats,
+      mints: mint.mints,
+      mintStats: mint.stats,
     });
     client.res.write(`event: trends\ndata: ${data}\n\n`);
   }
@@ -422,6 +475,20 @@ rest
   })
   .catch((err) => console.warn("collection bootstrap failed:", err.message));
 
+function lanUrls(port) {
+  const urls = [];
+  for (const rows of Object.values(networkInterfaces())) {
+    for (const row of rows ?? []) {
+      if (row.internal || row.family !== "IPv4") continue;
+      urls.push(`http://${row.address}:${port}`);
+    }
+  }
+  return urls;
+}
+
 server.listen(PORT, "0.0.0.0", () => {
   console.log(`RH feed  http://localhost:${PORT}`);
+  for (const url of lanUrls(PORT)) {
+    console.log(`         ${url}  (other PCs on this network)`);
+  }
 });

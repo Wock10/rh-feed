@@ -1,6 +1,8 @@
 import { normalizeStreamEvent } from "./normalize.js";
 import { TraderTracker } from "./tracker.js";
 import { ProjectWatch, extractMeta } from "./projects.js";
+import { MintWatch, DROP_TYPES, normalizeDrop } from "./mints.js";
+import { UserBook } from "./users.js";
 
 const WS_URL = "wss://stream-api.opensea.io/socket/websocket";
 const EVENT_TYPES = [
@@ -251,6 +253,7 @@ class BrowserStore {
       row.count += 1;
       if (Number.isFinite(event.price?.usd)) row.usd += event.price.usd;
       if (event.toName) row.buyerName = event.toName;
+      if (event.toImage) row.buyerImage = event.toImage;
     }
     return [...groups.values()]
       .filter((row) => row.count >= min)
@@ -306,8 +309,15 @@ export class RhFeedEngine {
     this.projects = new ProjectWatch();
     this.projectQueue = [];
     this.projectBusy = false;
+    this.mints = new MintWatch();
+    this.users = new UserBook();
+    this.mintWallet = null;
+    this.mintBusy = false;
+    this.eligBusy = false;
     this.persistTimer = null;
     this.projectTimer = null;
+    this.mintTimer = null;
+    this.mintElTimer = null;
   }
 
   on(name, fn) {
@@ -325,7 +335,10 @@ export class RhFeedEngine {
     this.trendTimer = setInterval(() => this.emitTrends(), 2000);
     this.persistTimer = setInterval(() => persistTracker(this.tracker), 30_000);
     this.projectTimer = setInterval(() => this.pumpProjects(), 6000);
+    this.mintTimer = setInterval(() => this.pollMints(), 90_000);
+    this.mintElTimer = setInterval(() => this.pumpMintElig(), 8000);
     this.emitHello();
+    this.pollMints();
   }
 
   stop() {
@@ -334,6 +347,8 @@ export class RhFeedEngine {
     clearInterval(this.trendTimer);
     clearInterval(this.persistTimer);
     clearInterval(this.projectTimer);
+    clearInterval(this.mintTimer);
+    clearInterval(this.mintElTimer);
     persistTracker(this.tracker);
     this.teardown();
   }
@@ -361,6 +376,7 @@ export class RhFeedEngine {
       traderStats: this.tracker.stats,
       projects: this.projects.board({ limit: 12 }),
       projectStats: this.projects.stats,
+      ...this.mintPayload(),
       collections: this.store.listCollections(),
       status: { stream: this.streamState, ...this.store.status() },
     };
@@ -381,6 +397,7 @@ export class RhFeedEngine {
       traderStats: this.tracker.stats,
       projects: this.projects.board({ limit: 12 }),
       projectStats: this.projects.stats,
+      ...this.mintPayload(),
     });
   }
 
@@ -453,6 +470,7 @@ export class RhFeedEngine {
     const kept = this.store.ingest(event);
     if (!kept) return;
     if (kept.type === "sale" || kept.type === "mint") this.tracker.ingest(kept);
+    this.users.ingest(kept);
     const proj = this.projects.notice(kept);
     if (proj?.status === "queued" && !this.projectQueue.includes(kept.slug)) {
       this.projectQueue.push(kept.slug);
@@ -486,6 +504,98 @@ export class RhFeedEngine {
         // ignore
       }
       this.ws = null;
+    }
+  }
+
+  mintPayload() {
+    const heat = this.store.heat({ types: ["sale"] });
+    const heatBySlug = new Map(heat.map((h) => [h.slug, h]));
+    const projectBySlug = this.projects.projects;
+    return {
+      mints: this.mints.board({ heatBySlug, projectBySlug, limit: 16 }),
+      mintStats: {
+        ...this.mints.stats,
+        wallet: this.mintWallet,
+      },
+    };
+  }
+
+  setMintWallet(addr) {
+    const next = String(addr ?? "").trim().toLowerCase();
+    this.mintWallet = /^0x[a-f0-9]{40}$/.test(next) ? next : null;
+    for (const row of this.mints.drops.values()) {
+      row.eligible = null;
+      row.eligibleReason = null;
+      row.eligAt = 0;
+    }
+  }
+
+  async pollMints() {
+    if (this.mintBusy || !this.apiKey || this.closed) return;
+    this.mintBusy = true;
+    try {
+      for (const type of DROP_TYPES) {
+        const url = new URL("https://api.opensea.io/api/v2/drops");
+        url.searchParams.set("type", type);
+        url.searchParams.set("chains", this.chain);
+        url.searchParams.set("limit", "50");
+        const res = await fetch(url, {
+          headers: { accept: "application/json", "x-api-key": this.apiKey },
+        });
+        if (!res.ok) continue;
+        const data = await res.json();
+        for (const drop of data?.drops ?? []) {
+          const row = normalizeDrop(drop, {
+            source: "calendar",
+            calendarType: type,
+            chain: this.chain,
+          });
+          if (row) this.mints.upsert(row);
+        }
+      }
+    } catch {
+      // ignore calendar gaps
+    } finally {
+      this.mintBusy = false;
+    }
+  }
+
+  async pumpMintElig() {
+    if (this.eligBusy || !this.apiKey || !this.mintWallet || this.closed) return;
+    const next = [...this.mints.drops.values()].find(
+      (row) =>
+        row.isMinting &&
+        (row.eligible == null || Date.now() - (row.eligAt ?? 0) > 3 * 60 * 1000),
+    );
+    if (!next) return;
+    this.eligBusy = true;
+    try {
+      const res = await fetch(
+        `https://api.opensea.io/api/v2/drops/${encodeURIComponent(next.slug)}/mint`,
+        {
+          method: "POST",
+          headers: {
+            accept: "application/json",
+            "content-type": "application/json",
+            "x-api-key": this.apiKey,
+          },
+          body: JSON.stringify({ minter: this.mintWallet, quantity: 1 }),
+        },
+      );
+      const text = await res.text();
+      if (res.ok) {
+        this.mints.upsert(next, { eligible: true, eligibleReason: null, eligAt: Date.now() });
+      } else if (/not eligible/i.test(text)) {
+        this.mints.upsert(next, { eligible: false, eligibleReason: "not eligible", eligAt: Date.now() });
+      } else if (/fully minted|sold out|insufficient supply/i.test(text)) {
+        this.mints.upsert(next, { eligible: false, eligibleReason: "minted out", eligAt: Date.now() });
+      } else if (/insufficient balance/i.test(text)) {
+        this.mints.upsert(next, { eligible: true, eligibleReason: "low balance", eligAt: Date.now() });
+      }
+    } catch {
+      // ignore
+    } finally {
+      this.eligBusy = false;
     }
   }
 
