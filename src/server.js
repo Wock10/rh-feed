@@ -44,7 +44,11 @@ const mints = new MintJobs({
   rest,
   env: process.env,
 });
-const users = new UserJobs({ dataDir: path.join(ROOT, "data") });
+const users = new UserJobs({
+  dataDir: path.join(ROOT, "data"),
+  rest,
+  env: process.env,
+});
 
 /** @type {Set<{ res: import('node:http').ServerResponse, types: Set<string>|null }>} */
 const clients = new Set();
@@ -175,7 +179,6 @@ stream.on("event", (eventName, payload) => {
   const kept = store.ingest(event);
   if (!kept) return;
   if (kept.type === "sale" || kept.type === "mint") jobs.ingest(kept);
-  users.ingest(kept);
   projects.notice(kept);
   broadcast(kept);
   if (kept.type === "sale" || kept.type === "mint") {
@@ -207,9 +210,13 @@ async function handleApi(req, res, url) {
 
   if (req.method === "GET" && url.pathname.startsWith("/api/users/")) {
     const addr = decodeURIComponent(url.pathname.slice("/api/users/".length)).toLowerCase();
-    const card = users.card(addr);
-    if (!card) return json(res, 404, { error: "unknown wallet" });
-    return json(res, 200, card);
+    try {
+      const card = await users.dossier(addr);
+      if (!card) return json(res, 400, { error: "bad wallet" });
+      return json(res, 200, card);
+    } catch (err) {
+      return json(res, 502, { error: err.message });
+    }
   }
 
   if (req.method === "GET" && url.pathname === "/api/projects") {

@@ -117,6 +117,10 @@ export class OpenSeaRest {
     return this.get(`/collections/${encodeURIComponent(slug)}`);
   }
 
+  async getCollectionStats(slug) {
+    return this.get(`/collections/${encodeURIComponent(slug)}/stats`);
+  }
+
   async getAccount(address) {
     try {
       return await this.get(`/accounts/${encodeURIComponent(address)}`);
@@ -124,6 +128,19 @@ export class OpenSeaRest {
       if (String(err.message).includes("404")) return null;
       throw err;
     }
+  }
+
+  async listAccountEvents(address, { chain = "robinhood", eventType, limit = 50, next } = {}) {
+    const data = await this.get(`/events/accounts/${encodeURIComponent(address)}`, {
+      chain,
+      limit,
+      next,
+      event_type: eventType,
+    });
+    return {
+      events: Array.isArray(data?.asset_events) ? data.asset_events : [],
+      next: data?.next ?? null,
+    };
   }
 
   async listNewestCollections(chain, { limit = 40 } = {}) {

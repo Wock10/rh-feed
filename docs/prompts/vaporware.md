@@ -1,7 +1,8 @@
 # RH new-project vaporware check
 
 Edit this file. It is the analysis spec.
-Jobs read it only when you click Ask. Auto LLM is off unless you set VAPORWARE_AUTO=1, and even then it is capped at 4 calls per hour.
+Jobs read it only when you click Ask, and only for collections OpenSea could not score cleanly.
+Auto LLM is off unless you set VAPORWARE_AUTO=1, and even then it is capped at 4 calls per hour.
 
 ## Goal
 
@@ -22,11 +23,11 @@ No intro. No markdown. No bullets. No quotes from the page.
 
 ## What counts as vapor
 
-- No site, or the site is parked / for sale / Linktree / Carrd / Discord invite only
-- "Coming soon", "mint soon", "utility TBA", "roadmap TBA", lorem ipsum
-- Twitter missing, mismatched, or obviously a new throwaway
-- Copied whitepaper language with no dates, team, or product
-- Site Twitter handle does not match the OpenSea Twitter
+- OpenSea has no website, Twitter, or Discord
+- Collection is disabled
+- Description is parked / for sale / Linktree / Discord-only / "coming soon" / "utility TBA"
+- Twitter missing or obviously a throwaway
+- One owner with supply already minted and no sales
 
 ## What to ignore
 
@@ -34,7 +35,8 @@ No intro. No markdown. No bullets. No quotes from the page.
 - Follower counts you cannot verify
 - Roadmap promises unless they are dated and specific
 - Price action (the feed already covers that)
+- Anything OpenSea already scored as verified / approved
 
 ## Evidence
 
-The job appends a tiny evidence block under this prompt at Ask time: OpenSea description, website URL, Twitter handle, page title, and <=900 chars of site text. Do not ask for more context.
+The job appends OpenSea collection fields and stats: safelist, created date, supply, owners, sales, volume, website, Twitter, Discord, description. Do not ask for a site scrape. Do not ask for more context.

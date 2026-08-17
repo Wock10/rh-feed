@@ -1,8 +1,8 @@
 import { normalizeStreamEvent } from "./normalize.js";
 import { TraderTracker } from "./tracker.js";
-import { ProjectWatch, extractMeta } from "./projects.js";
+import { ProjectWatch, extractMeta, extractStats } from "./projects.js";
 import { MintWatch, DROP_TYPES, normalizeDrop } from "./mints.js";
-import { UserBook } from "./users.js";
+import { UserBook, summarizeOpenSea } from "./users.js";
 
 const WS_URL = "wss://stream-api.opensea.io/socket/websocket";
 const EVENT_TYPES = [
@@ -470,7 +470,6 @@ export class RhFeedEngine {
     const kept = this.store.ingest(event);
     if (!kept) return;
     if (kept.type === "sale" || kept.type === "mint") this.tracker.ingest(kept);
-    this.users.ingest(kept);
     const proj = this.projects.notice(kept);
     if (proj?.status === "queued" && !this.projectQueue.includes(kept.slug)) {
       this.projectQueue.push(kept.slug);
@@ -599,6 +598,31 @@ export class RhFeedEngine {
     }
   }
 
+  async loadUser(address) {
+    const addr = String(address || "").toLowerCase();
+    const cached = this.users.fresh(addr);
+    if (cached) return cached;
+    if (!this.apiKey) {
+      return this.users.card(addr) ?? { address: addr, empty: true, source: "opensea" };
+    }
+    const headers = { accept: "application/json", "x-api-key": this.apiKey };
+    const [accountRes, eventsRes] = await Promise.all([
+      fetch(`https://api.opensea.io/api/v2/accounts/${encodeURIComponent(addr)}`, { headers }),
+      fetch(
+        `https://api.opensea.io/api/v2/events/accounts/${encodeURIComponent(addr)}?chain=${encodeURIComponent(this.chain)}&limit=50`,
+        { headers },
+      ),
+    ]);
+    const account = accountRes.ok ? await accountRes.json() : null;
+    const page = eventsRes.ok ? await eventsRes.json() : { asset_events: [] };
+    const card = summarizeOpenSea(addr, {
+      account,
+      events: page.asset_events ?? [],
+    });
+    this.users.put(card);
+    return card;
+  }
+
   async pumpProjects() {
     if (this.projectBusy || !this.projectQueue.length || !this.apiKey) return;
     const slug = this.projectQueue.shift();
@@ -610,8 +634,20 @@ export class RhFeedEngine {
         headers: { accept: "application/json", "x-api-key": this.apiKey },
       });
       if (res.ok) {
-        const meta = extractMeta(await res.json());
+        const raw = await res.json();
+        const meta = extractMeta(raw);
         this.projects.applyMeta(slug, meta);
+      }
+      try {
+        const statsRes = await fetch(
+          `https://api.opensea.io/api/v2/collections/${encodeURIComponent(slug)}/stats`,
+          { headers: { accept: "application/json", "x-api-key": this.apiKey } },
+        );
+        if (statsRes.ok) {
+          this.projects.applyStats(slug, extractStats(await statsRes.json()));
+        }
+      } catch {
+        // collection meta is enough to score
       }
       row.status = "scored";
       this.projects.rescore(row);

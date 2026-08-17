@@ -57,10 +57,10 @@ const FLAG_HELP = {
   public: "Public mint stage",
   gas: "Eligible, but the wallet is short on balance",
   low: "Supply almost gone",
-  thin: "Site / Twitter look thin",
-  vapor: "Site / Twitter look parked or fake",
-  ok: "Project looks real enough",
-  queued: "Still scraping",
+  thin: "OpenSea listing looks thin: missing socials, TBA copy, or one owner",
+  vapor: "OpenSea listing looks parked, disabled, or has no real socials",
+  ok: "OpenSea safelist / socials / owners look real enough",
+  queued: "Waiting on OpenSea collection + stats",
 };
 
 const MUTE_KEY = "rh-feed-mutes";
@@ -478,6 +478,8 @@ function openUser(address) {
 }
 
 async function loadUser(addr) {
+  state.user = { address: addr, loading: true };
+  renderUserCard();
   try {
     if (state.backend) {
       const res = await fetch(`/api/users/${encodeURIComponent(addr)}`, { cache: "no-store" });
@@ -487,13 +489,15 @@ async function loadUser(addr) {
         return;
       }
       state.user = await res.json();
+    } else if (state.engine?.loadUser) {
+      state.user = await state.engine.loadUser(addr);
     } else {
-      state.user = state.engine?.users?.card(addr) ?? { address: addr, empty: true };
+      state.user = { address: addr, empty: true };
     }
   } catch {
     state.user = { address: addr, empty: true };
   }
-  renderUserCard();
+  if (state.wallet === addr) renderUserCard();
 }
 
 function renderUserCard() {
@@ -507,8 +511,12 @@ function renderUserCard() {
   els.userCard.classList.remove("hidden");
   const name = u.name || short(u.address);
   const pic = avatar(u.address, u.image, partyKind(u.address, u.name), name, false);
+  if (u.loading) {
+    els.userCard.innerHTML = `${pic}<div class="heat-meta"><span class="name">${esc(name)}</span><span class="sub">Pulling OpenSea account events…</span></div>`;
+    return;
+  }
   if (u.empty) {
-    els.userCard.innerHTML = `${pic}<div class="heat-meta"><span class="name">${esc(name)}</span><span class="sub">No local dossier yet. It fills when this wallet prints in the live feed.</span></div>`;
+    els.userCard.innerHTML = `${pic}<div class="heat-meta"><span class="name">${esc(name)}</span><span class="sub">OpenSea has no RH sales/mints for this wallet yet.</span></div>`;
     return;
   }
   const cols = (u.collections ?? [])
@@ -531,7 +539,7 @@ function renderUserCard() {
     ${pic}
     <div class="heat-meta">
       <span class="name">${esc(name)}</span>
-      <span class="sub">${esc(short(u.address))} · ${u.buys}b / ${u.sells}s / ${u.mints}m · ${u.collectionCount} cols · seen ${relTime(u.firstTs)}</span>
+      <span class="sub">${esc(short(u.address))} · ${u.buys}b / ${u.sells}s / ${u.mints}m · ${u.collectionCount} cols · OpenSea${u.firstTs ? ` · seen ${relTime(u.firstTs)}` : ""}</span>
       <span class="sub">${eth || "no ETH prints yet"}${usd ? ` · stables ${usd}` : ""}${cols ? ` · ${esc(cols)}` : ""}</span>
     </div>
     <a class="mute-btn" href="${esc(u.url)}" target="_blank" rel="noreferrer">OS</a>`;
@@ -795,16 +803,28 @@ function renderProjects() {
       ]
         .filter(Boolean)
         .join(" · ");
+      const ask = canAsk && p.needsAgent
+        ? `<button type="button" class="mute-btn" data-ask="${esc(p.slug)}">Ask</button>`
+        : "";
+      const bits = [
+        `${p.ageMin}m`,
+        p.owners != null ? `${p.owners} own` : "",
+        p.sales != null ? `${p.sales} sales` : "",
+        p.safelist && p.safelist !== "not_requested" ? p.safelist : "",
+        p.llm?.why || "",
+      ]
+        .filter(Boolean)
+        .join(" · ");
       return `<div class="heat-row${state.focus === p.slug ? " on" : ""}">
         <button type="button" class="heat-meta" data-focus="${esc(p.slug)}" style="background:transparent;border:0;color:inherit;text-align:left;padding:0;font:inherit;cursor:pointer">
           <span class="name">${esc(p.name)}</span>
-          <span class="sub">${p.ageMin}m · ${links}${p.llm?.why ? ` · ${esc(p.llm.why)}` : ""}</span>
+          <span class="sub">${esc(bits)} · ${links}</span>
         </button>
         <span class="proj-actions">
           <span class="flag ${esc(p.verdict)}" title="${esc(FLAG_HELP[p.verdict] || "")}">${esc(p.verdict)}</span>
           ${flags}
           <button type="button" class="mute-btn" data-pack="${esc(p.slug)}">Copy</button>
-          ${canAsk ? `<button type="button" class="mute-btn" data-ask="${esc(p.slug)}">Ask</button>` : ""}
+          ${ask}
         </span>
       </div>`;
     })
@@ -898,6 +918,9 @@ async function copyPack(slug) {
 ---
 name: ${p?.name || slug}
 slug: ${slug}
+safelist: ${p?.safelist || "(none)"}
+owners: ${p?.owners ?? "(unknown)"}
+sales: ${p?.sales ?? "(unknown)"}
 website: ${p?.website || "(none)"}
 twitter: ${p?.twitter ? `@${p.twitter}` : "(none)"}
 heuristic: ${p?.verdict} (${(p?.flags ?? []).join(",") || "none"})

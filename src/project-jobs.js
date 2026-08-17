@@ -3,8 +3,9 @@ import path from "node:path";
 import {
   ProjectWatch,
   extractMeta,
+  extractStats,
   buildEvidence,
-  htmlToText,
+  needsAgent,
 } from "../docs/projects.js";
 import { CheapLlm } from "./cheap-llm.js";
 
@@ -109,14 +110,21 @@ export class ProjectJobs {
       const raw = await this.rest.getCollection(slug);
       const meta = extractMeta(raw ?? { slug, name: row.name });
       this.watch.applyMeta(slug, meta);
-      const site = await scrapeSite(meta.website, meta.twitter);
-      this.watch.applySite(slug, site);
+      try {
+        const stats = extractStats(await this.rest.getCollectionStats(slug));
+        this.watch.applyStats(slug, stats);
+      } catch (err) {
+        console.warn("project stats", slug, err.message);
+      }
       this.dirty = true;
-      if (this.llm.auto && this.llm.enabled && this.llm.remaining() > 0) {
-        const verdict = this.watch.projects.get(slug)?.verdict;
-        if (verdict === "thin") {
-          await this.review(slug).catch((err) => console.warn("auto llm skipped", err.message));
-        }
+      const scored = this.watch.projects.get(slug);
+      if (
+        this.llm.auto &&
+        this.llm.enabled &&
+        this.llm.remaining() > 0 &&
+        needsAgent(scored)
+      ) {
+        await this.review(slug).catch((err) => console.warn("auto llm skipped", err.message));
       }
     } catch (err) {
       row.status = "error";
@@ -130,58 +138,5 @@ export class ProjectJobs {
   async save() {
     this.dirty = false;
     await writeFile(this.path, JSON.stringify(this.watch.toJSON()));
-  }
-}
-
-async function scrapeSite(website, twitter) {
-  const site = {
-    title: "",
-    text: "",
-    chars: 0,
-    status: null,
-    twitter: null,
-    twitterStatus: null,
-  };
-  if (website) {
-    try {
-      const page = await fetchLimited(website);
-      site.status = page.status;
-      const parsed = htmlToText(page.body);
-      site.title = parsed.title;
-      site.text = parsed.text;
-      site.chars = parsed.chars;
-      site.twitter = parsed.twitter;
-    } catch {
-      site.status = 0;
-    }
-  }
-  if (twitter) {
-    try {
-      const page = await fetchLimited(`https://x.com/${encodeURIComponent(twitter)}`, { method: "GET" });
-      site.twitterStatus = page.status;
-    } catch {
-      site.twitterStatus = 0;
-    }
-  }
-  return site;
-}
-
-async function fetchLimited(url, { method = "GET" } = {}) {
-  const ac = new AbortController();
-  const timer = setTimeout(() => ac.abort(), 4000);
-  try {
-    const res = await fetch(url, {
-      method,
-      signal: ac.signal,
-      redirect: "follow",
-      headers: {
-        "user-agent": "rh-feed/1.0",
-        accept: "text/html,application/xhtml+xml",
-      },
-    });
-    const buf = Buffer.from(await res.arrayBuffer()).subarray(0, 12_000);
-    return { status: res.status, url: res.url, body: buf.toString("utf8") };
-  } finally {
-    clearTimeout(timer);
   }
 }
